@@ -332,7 +332,6 @@ def make_species_vibrational_thermo(
 
 def vibrational_specific_heat_expr(
         specific_gas_constant: np.float64,
-
         vibrational_temperatures: np.ndarray
 ) -> p.ExpressionNode:
     return np.sum([
@@ -353,7 +352,65 @@ def vibrational_energy_expr(specific_gas_constant: np.float64,
         for t_vib in vibrational_temperatures
     ])
 
-def relaxation_rate_expr() -> p.ExpressionNode:
-    pass
+# }}}
+
+
+# {{{ Translational-rotational / NASA-polynomial vibronic thermodynamics
+#
+# Two-temperature energy bookkeeping splits a species' total NASA9 enthalpy
+# into a translational-rotational piece (a classical, constant-Cp ideal-gas
+# formula, evaluated at the heavy-particle temperature) and a residual
+# "vibronic" piece (whatever the NASA9 fit has left over once the tr-rot
+# baseline is removed, capturing vibration, anharmonicity, and electronic
+# excitation, evaluated at the vibrational temperature). The two pieces are
+# constructed so they sum back to exactly the full NASA9 enthalpy when both
+# temperatures coincide.
+
+def translational_rotational_energy_expr(
+        cv_translational_rotational: float,
+        reference_temperature: float,
+        reference_energy_of_formation: float,
+        temperature: p.ExpressionNode) -> p.ExpressionNode:
+    """Translational-rotational internal energy: a classical (constant-Cv)
+    ideal-gas formula referenced at *reference_temperature*.
+    """
+    return (
+        cv_translational_rotational * (temperature - reference_temperature)
+        + reference_energy_of_formation
+    )
+
+
+def nasa_polynomial_vibrational_energy_expr(
+        enthalpy_rt_expr: p.ExpressionNode,
+        specific_gas_constant: float,
+        cp_translational_rotational: float,
+        reference_temperature: float,
+        reference_enthalpy_of_formation: float,
+        temperature: p.ExpressionNode) -> p.ExpressionNode:
+    """Vibronic (vibrational + electronic) energy: the full NASA9 enthalpy
+    at *temperature*, minus the translational-rotational baseline. *
+    enthalpy_rt_expr* is the species' dimensionless NASA9 enthalpy (h/RT)
+    expression, already substituted so it is a function of *temperature*.
+    """
+    nasa_polynomial_enthalpy = enthalpy_rt_expr * specific_gas_constant * temperature
+    return (
+        nasa_polynomial_enthalpy
+        - cp_translational_rotational * (temperature - reference_temperature)
+        - reference_enthalpy_of_formation
+    )
+
+
+def nasa_polynomial_vibrational_specific_heat_expr(
+        cp_r_expr: p.ExpressionNode,
+        specific_gas_constant: float,
+        cp_translational_rotational: float) -> p.ExpressionNode:
+    """Derivative of :func:`nasa_polynomial_vibrational_energy_expr` with
+    respect to temperature: the full NASA9 Cp, minus the same tr-rot
+    baseline. *cp_r_expr* is the species' dimensionless NASA9 Cp (Cp/R)
+    expression, already substituted so it is a function of the target
+    temperature.
+    """
+    nasa_polynomial_specific_heat_cp = cp_r_expr * specific_gas_constant
+    return nasa_polynomial_specific_heat_cp - cp_translational_rotational
 
 # }}}

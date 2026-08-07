@@ -1,7 +1,7 @@
 import numpy as np
 import pymbolic.primitives as p
 from pymbolic import substitute
-from dataclasses import dataclass, field, InitVar
+from dataclasses import dataclass, field
 from typing import Union, Optional, List, Tuple
 
 
@@ -9,6 +9,14 @@ from typing import Union, Optional, List, Tuple
 
 def _ones_like(arg):
     return 0 * arg + 1
+
+# }}}
+
+
+# {{{ Constants
+
+_boltzmann = 1.380649e-23
+_avogadro = 6.02214076e23
 
 # }}}
 
@@ -133,5 +141,85 @@ def species_production_rate_expr(sp_index: int,
     sum_fwd = sum(nu * r_net[i] for nu, i in zip(stoich_fwd, fwd_part_set))
     sum_rev = sum(nu * r_net[i] for nu, i in zip(stoich_rev, rev_part_set))
     return (sum_rev - sum_fwd) * ones
+
+# }}}
+
+
+# {{{ Vibrational-translational (VT) energy transfer
+
+def pairwise_relaxation_time_expr(
+        millikan_white_a: float,
+        millikan_white_b: float,
+        park_cross_section: float,
+        reduced_molar_mass_sqrt: float,
+        atmospheric_pressure: float,
+        temperature: p.ExpressionNode) -> p.ExpressionNode:
+    """Return the pressure-scaled Millikan-White + Park VT relaxation time
+    for one (VT-active molecule, heavy collision partner) pair, as a
+    pymbolic ExpressionNode in *temperature*.
+    """
+    millikan_white_term = exp(
+        millikan_white_a * (temperature ** (-1 / 3) - millikan_white_b)
+        - 18.42
+    ) * atmospheric_pressure
+
+    park_high_temperature_factor = p.If(
+        p.Comparison(temperature, "<=", 20000),
+        (temperature / 50000) ** 2,
+        1 / 6.25,
+    )
+    # sqrt(pi * boltzmann_constant / (8 * avogadro_number)), matching
+    # PLATO's VT_FAC_PARK (general_transfer.F90)
+
+    park_relaxation_constant = np.sqrt(
+        np.pi * _boltzmann / (8 * _avogadro)
+    )
+    park_term = (
+        park_relaxation_constant * temperature ** 0.5
+        * park_high_temperature_factor
+        / park_cross_section * reduced_molar_mass_sqrt
+    )
+    return millikan_white_term + park_term
+
+
+def vt_mean_relaxation_rate_expr(
+        pressure: p.ExpressionNode,
+        heavy_partner_mole_ratios: List[p.ExpressionNode],
+        pairwise_relaxation_times: List[p.ExpressionNode]) -> p.ExpressionNode:
+    """Return the inverse mean VT relaxation time (SSH frequency average)
+    for one VT-active molecule, given the mass-fraction-over-molar-mass
+    weight of every heavy collision partner and the corresponding pairwise
+    relaxation times from :func:`pairwise_relaxation_time_expr`.
+
+    *pairwise_relaxation_times* are pressure-normalized (Pa*s, a function of
+    temperature only, per the Millikan-White scaling p*tau = f(T)); the
+    actual mean relaxation rate 1/tau at the current gas state requires
+    multiplying the SSH-averaged frequency by the current *pressure*
+    (matching PLATO's ``ov_tau_VT = (p*Dm)/N`` in ``add_Omega_VT``).
+    """
+    heavy_partner_weight_sum = sum(heavy_partner_mole_ratios)
+    relaxation_rate_sum = sum(
+        weight / relaxation_time
+        for weight, relaxation_time in zip(
+            heavy_partner_mole_ratios, pairwise_relaxation_times)
+    )
+    return pressure * relaxation_rate_sum / heavy_partner_weight_sum
+
+
+def vt_energy_transfer_expr(
+        density: p.ExpressionNode,
+        molecule_mass_fraction: p.ExpressionNode,
+        vibrational_energy_at_heavy_temperature: p.ExpressionNode,
+        vibrational_energy_at_vibrational_temperature: p.ExpressionNode,
+        mean_relaxation_rate: p.ExpressionNode) -> p.ExpressionNode:
+    """Return the Landau-Teller VT energy-transfer contribution of one
+    VT-active molecule to Omega_VT [W/m^3].
+    """
+    return (
+        density * molecule_mass_fraction
+        * (vibrational_energy_at_heavy_temperature
+           - vibrational_energy_at_vibrational_temperature)
+        * mean_relaxation_rate
+    )
 
 # }}}

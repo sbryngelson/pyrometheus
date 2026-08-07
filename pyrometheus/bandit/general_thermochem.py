@@ -44,6 +44,21 @@ class BaseMechanism:
     species_vib_thermo_expressions: np.ndarray = np.empty(
         shape=(0,), dtype=SpeciesVibrationalThermo
     )
+    pressure_relaxation_time_exprs: np.ndarray = np.empty(
+        shape=(0,), dtype=p.ExpressionNode
+    )
+    vt_energy_transfer_exprs: np.ndarray = np.empty(
+        shape=(0,), dtype=p.ExpressionNode
+    )
+    translational_rotational_energy_exprs: np.ndarray = np.empty(
+        shape=(0,), dtype=p.ExpressionNode
+    )
+    nasa_polynomial_vibrational_energy_exprs: np.ndarray = np.empty(
+        shape=(0,), dtype=p.ExpressionNode
+    )
+    nasa_polynomial_vibrational_specific_heat_exprs: np.ndarray = np.empty(
+        shape=(0,), dtype=p.ExpressionNode
+    )
     param_vals: np.ndarray = np.empty(shape=(0,), dtype=np.float64)
 
     def __init__(self):
@@ -72,6 +87,13 @@ class BaseMechanism:
 
     def has_nonequilibrium_energy_modes(self) -> bool:
         return self.nonequil_thermo
+
+    @property
+    def num_vt_molecules(self):
+        """
+        :returns: The number of VT-active molecules in the mechanism.
+        """
+        raise NotImplementedError
 
     def reactant_indices(self, reaction_index: int):
         """:returns: The indices for reactants in reaction with index
@@ -119,7 +141,75 @@ class BaseMechanism:
         "class:`chem_expr.thermo.SpeciesVibrationalThermo`
         """
         raise NotImplementedError
-    
+
+    def make_vt_relaxation_time_exprs(self, vt_molecule_index):
+        """:return: A list of pairwise VT relaxation-time expressions
+        (one per heavy collision partner) for the VT-active molecule with
+        index *vt_molecule_index*, as
+        :class:`pymbolic.primitives.ExpressionNode`.
+        """
+        raise NotImplementedError
+
+    def make_vt_energy_transfer_expr(self, vt_molecule_index) -> p.ExpressionNode:
+        """:return: The Landau-Teller energy-transfer contribution of the
+        VT-active molecule with index *vt_molecule_index* to Omega_VT, as a
+        :class:`pymbolic.primitives.ExpressionNode`.
+        """
+        raise NotImplementedError
+
+    @property
+    def translational_rotational_specific_heat_cv(self):
+        """
+        :returns: Per-species translational-rotational Cv [J/(kg K)]
+        (equipartition theorem: 3/2 R for atoms, 5/2 R for linear
+        molecules).
+        """
+        raise NotImplementedError
+
+    @property
+    def translational_rotational_specific_heat_cp(self):
+        """
+        :returns: Per-species translational-rotational Cp [J/(kg K)].
+        """
+        raise NotImplementedError
+
+    @property
+    def standard_enthalpy_of_formation(self):
+        """
+        :returns: Per-species standard enthalpy of formation [J/kg]: the
+        NASA9 enthalpy evaluated at the standard reference temperature.
+        """
+        raise NotImplementedError
+
+    @property
+    def standard_energy_of_formation(self):
+        """
+        :returns: Per-species standard energy of formation [J/kg].
+        """
+        raise NotImplementedError
+
+    def make_translational_rotational_energy_expr(self, species_index) -> p.ExpressionNode:
+        """:return: The translational-rotational internal energy
+        expression for species with index *species_index*, as a
+        :class:`pymbolic.primitives.ExpressionNode`.
+        """
+        raise NotImplementedError
+
+    def make_nasa_polynomial_vibrational_energy_expr(self, species_index) -> p.ExpressionNode:
+        """:return: The NASA-polynomial-based vibronic energy expression
+        for species with index *species_index*, as a
+        :class:`pymbolic.primitives.ExpressionNode`.
+        """
+        raise NotImplementedError
+
+    def make_nasa_polynomial_vibrational_specific_heat_expr(self, species_index) -> p.ExpressionNode:
+        """:return: The NASA-polynomial-based vibronic specific heat
+        expression for species with index *species_index*, as a
+        :class:`pymbolic.primitives.ExpressionNode`.
+        """
+        raise NotImplementedError
+
+
     def make_mass_action_rate(self, reaction_index, hardcode_params=True):
         """
         :returns: mass action rate for *reaction_index* as a
@@ -189,12 +279,57 @@ class BaseMechanism:
             )
 
         # Now check for vibrational nonequlibrium
-        if self.has_nonequilibrium_energy_modes:
+        if self.has_nonequilibrium_energy_modes():
             for isp in range(self.num_species):
                 self.species_vib_thermo_expressions = np.append(
                     self.species_vib_thermo_expressions,
                     self.make_species_vibrational_thermo(isp)
                 )
+            self.make_vt_transfer()
+            self.make_nasa_polynomial_vibrational_thermo()
+
+    def make_nasa_polynomial_vibrational_thermo(self):
+        """Loop over species to build their translational-rotational and
+        NASA-polynomial-based vibronic energy/specific-heat expressions by
+        invoking :class:`BaseMechanism.make_translational_rotational_energy_expr`,
+        :class:`BaseMechanism.make_nasa_polynomial_vibrational_energy_expr`, and
+        :class:`BaseMechanism.make_nasa_polynomial_vibrational_specific_heat_expr`.
+        """
+        assert not self.translational_rotational_energy_exprs.size
+        assert not self.nasa_polynomial_vibrational_energy_exprs.size
+        assert not self.nasa_polynomial_vibrational_specific_heat_exprs.size
+        for species_index in range(self.num_species):
+            self.translational_rotational_energy_exprs = np.append(
+                self.translational_rotational_energy_exprs,
+                self.make_translational_rotational_energy_expr(species_index)
+            )
+            self.nasa_polynomial_vibrational_energy_exprs = np.append(
+                self.nasa_polynomial_vibrational_energy_exprs,
+                self.make_nasa_polynomial_vibrational_energy_expr(species_index)
+            )
+            self.nasa_polynomial_vibrational_specific_heat_exprs = np.append(
+                self.nasa_polynomial_vibrational_specific_heat_exprs,
+                self.make_nasa_polynomial_vibrational_specific_heat_expr(species_index)
+            )
+
+    def make_vt_transfer(self):
+        """Loop over VT-active molecules to build their pairwise
+        relaxation-time expressions and Landau-Teller energy-transfer
+        contributions by invoking
+        :class:`BaseMechanism.make_vt_relaxation_time_exprs` and
+        :class:`BaseMechanism.make_vt_energy_transfer_expr`.
+        """
+        assert not self.pressure_relaxation_time_exprs.size
+        assert not self.vt_energy_transfer_exprs.size
+        for vt_molecule_index in range(self.num_vt_molecules):
+            self.pressure_relaxation_time_exprs = np.append(
+                self.pressure_relaxation_time_exprs,
+                self.make_vt_relaxation_time_exprs(vt_molecule_index)
+            )
+            self.vt_energy_transfer_exprs = np.append(
+                self.vt_energy_transfer_exprs,
+                self.make_vt_energy_transfer_expr(vt_molecule_index)
+            )
 
     def make_pyro(self, pyro_np=np):
         """

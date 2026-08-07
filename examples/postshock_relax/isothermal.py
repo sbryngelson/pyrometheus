@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 
 
 def make_mechanism(lib_name, pyro_np, hardcode_params=True):
-    plato_mech = PlatoMechanism(
+    return PlatoMechanism(
         mixture='air5',
         reaction_set='air5',
         transfer='TTv',
@@ -19,7 +19,6 @@ def make_mechanism(lib_name, pyro_np, hardcode_params=True):
         pyro_np=pyro_np,
         hardcode_params=hardcode_params
     )
-    return plato_mech
 
 
 def make_pyro_object(pyro_cls, pyro_np):
@@ -143,20 +142,16 @@ if __name__ == "__main__":
 
     lib_name = 'plato'
     mech = make_mechanism(lib_name, np, hardcode_params=True)
-    # for i, sp_thermo in enumerate(mech.species_vib_thermo_expressions):
-    #     print(f'expr {i} ', sp_thermo.energy_expr)
-
-    # print(mech.namespace.thermochem.vt_mw_a())
-    # exit()
-
     pyro_cls = pyro.get_thermochem_class(mech)
     pyro_gas = make_pyro_object(pyro_cls, jnp)
 
     # {{{ Initial Condition
 
-    cold_temp = 300
+    cold_temp = 500
     bath_temp = 1e4
-    temperature = bath_temp * jnp.ones(pyro_gas.num_temperatures)
+    temperature = jnp.array([
+        bath_temp, cold_temp
+    ])
     pressure = 1e3
     mole_fractions = jnp.zeros(pyro_gas.num_species)
     mole_fractions = mole_fractions.at[mech.species_index("O2")].set(0.21)
@@ -177,21 +172,26 @@ if __name__ == "__main__":
 
     # {{{ Solve
 
-    num_steps = 10000
-    step_size = 1e-8
+    num_steps = 200000
+    step_size = 1e-5
     sol_s = time_march(
         num_steps, step_size, densities,
     )
 
     # }}}
 
-    # {{{ Plot
-
+    # {{{ Plot    
     colors = ['k',
               'orangered',
               'mediumseagreen',
               'royalblue',
               'mediumpurple',]
+
+    ref_sol = np.loadtxt(
+        'plato_solution_isothermal.dat',
+        skiprows=7
+    )
+
     sol_t = step_size * np.arange(0, num_steps + 1, 1)
     sol_d = jnp.sum(sol_s, axis=1)
 
@@ -204,13 +204,23 @@ if __name__ == "__main__":
             linewidth=2,
             label=mech.species_name(i)
         )
+        ax.loglog(
+            ref_sol[1::20, 0],
+            ref_sol[1::20, 1 + i],
+            linestyle='None',
+            marker='o',
+            color=colors[i],
+            mec=colors[i],
+            mfc='w',
+            markersize=5,
+        )
 
     ax.set_xlabel('Time', fontsize=16)
     ax.set_ylabel('Mass Fractions', fontsize=16)
     ax.legend(frameon=False, labelcolor='linecolor',
               bbox_to_anchor=(0.5, 1.15), loc="upper center",
               ncol=pyro_gas.num_species, fontsize=12)
-    plt.savefig('./output.png', bbox_inches='tight',)
+    plt.savefig('./output_isothermal.png', bbox_inches='tight',)
     plt.close()
 
     # }}}

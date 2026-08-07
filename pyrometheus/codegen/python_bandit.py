@@ -134,11 +134,11 @@ class Thermochemistry:
 
     def get_species_specific_heats_cv_r(self, temperature):
         cp_r = self.get_species_specific_heats_cp_r(temperature)
-        return cp_r - _pyro_ones_like(cp_r)
+        return cp_r - self._pyro_ones_like(cp_r)
 
     def get_species_internal_energies_rt(self, temperature):
         h_rt = self.get_species_enthalpies_rt(temperature)
-        return h_rt - _pyro_ones_like(h_rt)
+        return h_rt - self._pyro_ones_like(h_rt)
 
     def get_species_gibbs_rt(self, temperature):
         return self._pyro_make_array([
@@ -186,7 +186,7 @@ class Thermochemistry:
             %endfor
         ])
 
-    %if bandit_mech.has_nonequilibrium_energy_modes:
+    %if bandit_mech.has_nonequilibrium_energy_modes():
     def get_species_vibrational_energies(self, temperature):
         ones = self._pyro_ones_like(temperature[1])
         return self._pyro_make_array([
@@ -195,8 +195,54 @@ class Thermochemistry:
             %endfor
         ])
 
-    def get_relaxation_time(self, temperature):
-        pass
+    def get_species_vibrational_specific_heats(self, temperature):
+        ones = self._pyro_ones_like(temperature[1])
+        return self._pyro_make_array([
+            %for sp_thermo in bandit_mech.species_vib_thermo_expressions:
+            ${cgm(sp_thermo.specific_heat_expr)} * ones,
+            %endfor
+        ])
+
+    def get_pressure_relaxation_times(self, temperature):
+        ones = self._pyro_ones_like(temperature[0])
+        return self._pyro_make_array([
+            %for expr in bandit_mech.pressure_relaxation_time_exprs:
+            ${cgm(expr)} * ones,
+            %endfor
+        ])
+
+    def get_vt_energy_transfer_source(self, density, temperature, mass_fractions):
+        ones = self._pyro_ones_like(temperature[0])
+        pressure = self.get_pressure(density, temperature[0], mass_fractions)
+        return (
+            %for expr in bandit_mech.vt_energy_transfer_exprs:
+            + ${cgm(expr)}
+            %endfor
+        ) * ones
+
+    def get_translational_rotational_energy(self, temperature):
+        ones = self._pyro_ones_like(temperature[0])
+        return self._pyro_make_array([
+            %for expr in bandit_mech.translational_rotational_energy_exprs:
+            ${cgm(expr)} * ones,
+            %endfor
+        ])
+
+    def get_nasa_polynomial_vibrational_energy(self, temperature):
+        ones = self._pyro_ones_like(temperature[1])
+        return self._pyro_make_array([
+            %for expr in bandit_mech.nasa_polynomial_vibrational_energy_exprs:
+            ${cgm(expr)} * ones,
+            %endfor
+        ])
+
+    def get_nasa_polynomial_vibrational_specific_heat(self, temperature):
+        ones = self._pyro_ones_like(temperature[1])
+        return self._pyro_make_array([
+            %for expr in bandit_mech.nasa_polynomial_vibrational_specific_heat_exprs:
+            ${cgm(expr)} * ones,
+            %endfor
+        ])
     %endif
 """, strict_undefined=True)
 

@@ -1,5 +1,8 @@
+import math
 import numpy as np
+import pymbolic.primitives as p
 from typing import Dict, List, Union, Tuple
+from pymbolic import evaluate
 from pymbolic.primitives import Variable
 from pyrometheus.bandit.general_thermochem import BaseNamespace, BaseMechanism
 from pyrometheus.bandit.chem_expr.kinetics import (
@@ -7,6 +10,9 @@ from pyrometheus.bandit.chem_expr.kinetics import (
     make_arrhenius,
     reaction_progress_rate_expr,
     species_production_rate_expr,
+    pairwise_relaxation_time_expr,
+    vt_mean_relaxation_rate_expr,
+    vt_energy_transfer_expr,
     conc, k_fwd, log_k_eq, exp,
 )
 from pyrometheus.bandit.chem_expr.thermo import (
@@ -15,8 +21,16 @@ from pyrometheus.bandit.chem_expr.thermo import (
     SpeciesVibrationalThermo,
     make_species_nasa_thermo,
     make_species_vibrational_thermo,
-    equilibrium_constant_expr
+    equilibrium_constant_expr,
+    translational_rotational_energy_expr,
+    nasa_polynomial_vibrational_energy_expr,
+    nasa_polynomial_vibrational_specific_heat_expr,
 )
+
+# Standard thermodynamic reference temperature [K], matching the convention
+# NASA9 polynomials are fit against (h(T_ref) equals the standard enthalpy
+# of formation).
+standard_reference_temperature = 298.15
 
 # {{{ Map reaction type from human-readable to plato naming convention
 
@@ -274,9 +288,67 @@ class PlatoMechanism(BaseMechanism):
         return len(self._reactions)
 
     @property
+    def num_vt_molecules(self):
+        """Return number of VT-active molecules."""
+        return self.namespace.n_vt_molecules
+
+    @property
     def molecular_weights(self):
         """Return species molecular weights in kg/kmol."""
         return np.array([1e3 * m for m in self.namespace.molar_masses])
+
+    @property
+    def translational_rotational_specific_heat_cv(self):
+        """Return per-species translational-rotational Cv [J/(kg K)]:
+        equipartition theorem, 3/2 R for atoms (0 rotational degrees of
+        freedom) or 5/2 R for linear molecules (2 rotational degrees of
+        freedom, inferred from whether the species has vibrational modes).
+        """
+        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        rotational_degrees_of_freedom = np.array([
+            2.0 if len(self.species_vibrational_temperature(species_index))
+            else 0.0
+            for species_index in range(self.num_species)
+        ])
+        return 0.5 * (3.0 + rotational_degrees_of_freedom) * specific_gas_constant
+
+    @property
+    def translational_rotational_specific_heat_cp(self):
+        """Return per-species translational-rotational Cp [J/(kg K)]."""
+        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        return self.translational_rotational_specific_heat_cv + specific_gas_constant
+
+    @property
+    def standard_enthalpy_of_formation(self):
+        """Return per-species standard enthalpy of formation [J/kg]: the
+        NASA9 enthalpy evaluated at the standard reference temperature.
+        """
+        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        context = {
+            "temperature": [standard_reference_temperature] * self.num_temp,
+            "exp": math.exp,
+            "log": math.log,
+        }
+        enthalpy_rt_at_reference = np.array([
+            evaluate(
+                self.species_nasa_thermo_polynomials[species_index].enthalpy_poly.expr,
+                context
+            )
+            for species_index in range(self.num_species)
+        ])
+        return (
+            enthalpy_rt_at_reference
+            * specific_gas_constant * standard_reference_temperature
+        )
+
+    @property
+    def standard_energy_of_formation(self):
+        """Return per-species standard energy of formation [J/kg]."""
+        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        return (
+            self.standard_enthalpy_of_formation
+            - specific_gas_constant * standard_reference_temperature
+        )
 
     @property
     def species_names(self):
@@ -289,7 +361,8 @@ class PlatoMechanism(BaseMechanism):
         return self._reactions
 
     def species_vibrational_temperature(self, species_index) -> np.ndarray:
-        return self.namespace.__getattr__("theta_vib", species_index)
+        # theta_vib expects a 1-based component index; species_index is 0-based.
+        return self.namespace.__getattr__("theta_vib", species_index + 1)
     
     def _nasa_polynomial_interval_bounds(self, species_index):
         """Return NASA poly interval temperature bounds."""
@@ -471,11 +544,112 @@ class PlatoMechanism(BaseMechanism):
 
     def make_species_vibrational_thermo(
             self, species_index
-    ) -> SpeciesVibrationalThermo:        
+    ) -> SpeciesVibrationalThermo:
         vib_temp = self.species_vibrational_temperature(species_index)
         return make_species_vibrational_thermo(
             self.namespace.gas_constant / self.molecular_weights[species_index],
             vib_temp
+        )
+
+    def make_vt_relaxation_time_exprs(self, vt_molecule_index):
+        heavy_temperature = Variable("temperature")[0]
+        millikan_white_a = self.namespace.vt_mw_a()[vt_molecule_index, :]
+        millikan_white_b = self.namespace.vt_mw_b()[vt_molecule_index, :]
+        park_cross_section = self.namespace.vt_park_sigma()[vt_molecule_index]
+        reduced_molar_mass_sqrt = self.namespace.vt_sqrmu()[vt_molecule_index, :]
+        return [
+            pairwise_relaxation_time_expr(
+                millikan_white_a[heavy_partner_index],
+                millikan_white_b[heavy_partner_index],
+                park_cross_section,
+                reduced_molar_mass_sqrt[heavy_partner_index],
+                self.namespace.one_atm,
+                heavy_temperature,
+            )
+            for heavy_partner_index in range(self.namespace.n_heavy)
+        ]
+
+    def make_vt_energy_transfer_expr(self, vt_molecule_index) -> p.ExpressionNode:
+        from pymbolic import substitute
+        mass_fractions = Variable("mass_fractions")
+        heavy_species_indices = [
+            self.namespace.n_e + heavy_partner_index
+            for heavy_partner_index in range(self.namespace.n_heavy)
+        ]
+        heavy_partner_mole_ratios = [
+            mass_fractions[heavy_species_index]
+            / self.molecular_weights[heavy_species_index]
+            for heavy_species_index in heavy_species_indices
+        ]
+        heavy_temperature = Variable("temperature")[0]
+        mixture_molecular_weight_inverse = sum(
+            mass_fractions[species_index] / self.molecular_weights[species_index]
+            for species_index in range(self.num_species)
+        )
+        mean_relaxation_rate = vt_mean_relaxation_rate_expr(
+            Variable("pressure"),
+            heavy_partner_mole_ratios,
+            self.make_vt_relaxation_time_exprs(vt_molecule_index)
+        )
+
+        species_index = int(self.namespace.vt_molecule_ids()[vt_molecule_index]) - 1
+        vibrational_thermo = self.species_vib_thermo_expressions[species_index]
+        vibrational_energy_at_vib_temperature = vibrational_thermo.energy_expr
+        vibrational_energy_at_heavy_temperature = substitute(
+            vibrational_thermo.energy_expr,
+            {Variable("temperature")[1]: Variable("temperature")[0]}
+        )
+
+        return vt_energy_transfer_expr(
+            Variable("density"),
+            mass_fractions[species_index],
+            vibrational_energy_at_heavy_temperature,
+            vibrational_energy_at_vib_temperature,
+            mean_relaxation_rate,
+        )
+
+    def make_translational_rotational_energy_expr(self, species_index) -> p.ExpressionNode:
+        heavy_temperature = Variable("temperature")[0]
+        return translational_rotational_energy_expr(
+            self.translational_rotational_specific_heat_cv[species_index],
+            standard_reference_temperature,
+            self.standard_energy_of_formation[species_index],
+            heavy_temperature,
+        )
+
+    def make_nasa_polynomial_vibrational_energy_expr(self, species_index) -> p.ExpressionNode:
+        from pymbolic import substitute
+        vibrational_temperature = Variable("temperature")[1]
+        specific_gas_constant = (
+            self.namespace.gas_constant / self.molecular_weights[species_index]
+        )
+        enthalpy_rt_at_vibrational_temperature = substitute(
+            self.species_nasa_thermo_polynomials[species_index].enthalpy_poly.expr,
+            {Variable("temperature")[0]: vibrational_temperature}
+        )
+        return nasa_polynomial_vibrational_energy_expr(
+            enthalpy_rt_at_vibrational_temperature,
+            specific_gas_constant,
+            self.translational_rotational_specific_heat_cp[species_index],
+            standard_reference_temperature,
+            self.standard_enthalpy_of_formation[species_index],
+            vibrational_temperature,
+        )
+
+    def make_nasa_polynomial_vibrational_specific_heat_expr(self, species_index) -> p.ExpressionNode:
+        from pymbolic import substitute
+        vibrational_temperature = Variable("temperature")[1]
+        specific_gas_constant = (
+            self.namespace.gas_constant / self.molecular_weights[species_index]
+        )
+        cp_r_at_vibrational_temperature = substitute(
+            self.species_nasa_thermo_polynomials[species_index].cp_poly.expr,
+            {Variable("temperature")[0]: vibrational_temperature}
+        )
+        return nasa_polynomial_vibrational_specific_heat_expr(
+            cp_r_at_vibrational_temperature,
+            specific_gas_constant,
+            self.translational_rotational_specific_heat_cp[species_index],
         )
 
     def make_equilibrium_constant(self, reaction_index):

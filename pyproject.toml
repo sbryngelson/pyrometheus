@@ -67,6 +67,9 @@ test = [
     "pytest",
     "pybind11",
     "setuptools",
+    "meson",
+    "ninja",
+    "meson-python",
 ]
 docs = [
     "furo",
