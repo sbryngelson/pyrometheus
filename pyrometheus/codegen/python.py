@@ -407,7 +407,7 @@ class Thermochemistry:
             iter_rhs = enthalpy_or_energy - he_fun(iter_temp, y)
             iter_deriv = -pv_fun(iter_temp, y)
             dt = -iter_rhs / iter_deriv
-            iter_temp += dt
+            iter_temp = iter_temp + dt
             if self._pyro_norm(dt, np.inf) < tol:
                 return iter_temp
 
