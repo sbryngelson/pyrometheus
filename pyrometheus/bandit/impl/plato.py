@@ -1,4 +1,3 @@
-import math
 import numpy as np
 import pymbolic.primitives as p
 from typing import Dict, List, Union, Tuple
@@ -304,34 +303,51 @@ class PlatoMechanism(BaseMechanism):
         freedom) or 5/2 R for linear molecules (2 rotational degrees of
         freedom, inferred from whether the species has vibrational modes).
         """
-        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        specific_gas_constant = (
+            self.namespace.gas_constant
+            / self.molecular_weights
+        )
         rotational_degrees_of_freedom = np.array([
-            2.0 if len(self.species_vibrational_temperature(species_index))
-            else 0.0
+            2 if len(self.species_vibrational_temperature(species_index))
+            else 0
             for species_index in range(self.num_species)
         ])
-        return 0.5 * (3.0 + rotational_degrees_of_freedom) * specific_gas_constant
+        return (
+            0.5
+            * (3 + rotational_degrees_of_freedom)
+            * specific_gas_constant
+        )
 
     @property
     def translational_rotational_specific_heat_cp(self):
         """Return per-species translational-rotational Cp [J/(kg K)]."""
-        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
-        return self.translational_rotational_specific_heat_cv + specific_gas_constant
+        specific_gas_constant = (
+            self.namespace.gas_constant
+            / self.molecular_weights
+        )
+        return (
+            self.translational_rotational_specific_heat_cv
+            + specific_gas_constant
+        )
 
     @property
     def standard_enthalpy_of_formation(self):
         """Return per-species standard enthalpy of formation [J/kg]: the
         NASA9 enthalpy evaluated at the standard reference temperature.
         """
-        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        specific_gas_constant = (
+            self.namespace.gas_constant
+            / self.molecular_weights
+        )
         context = {
             "temperature": [standard_reference_temperature] * self.num_temp,
-            "exp": math.exp,
-            "log": math.log,
+            "exp": np.exp,
+            "log": np.log,
         }
+        nasa_poly = self.species_nasa_thermo_polynomials
         enthalpy_rt_at_reference = np.array([
             evaluate(
-                self.species_nasa_thermo_polynomials[species_index].enthalpy_poly.expr,
+                nasa_poly[species_index].enthalpy_poly.expr,
                 context
             )
             for species_index in range(self.num_species)
@@ -344,7 +360,10 @@ class PlatoMechanism(BaseMechanism):
     @property
     def standard_energy_of_formation(self):
         """Return per-species standard energy of formation [J/kg]."""
-        specific_gas_constant = self.namespace.gas_constant / self.molecular_weights
+        specific_gas_constant = (
+            self.namespace.gas_constant
+            / self.molecular_weights
+        )
         return (
             self.standard_enthalpy_of_formation
             - specific_gas_constant * standard_reference_temperature
@@ -361,9 +380,10 @@ class PlatoMechanism(BaseMechanism):
         return self._reactions
 
     def species_vibrational_temperature(self, species_index) -> np.ndarray:
-        # theta_vib expects a 1-based component index; species_index is 0-based.
+        # theta_vib expects a 1-based component index but species_index is
+        # zero-based
         return self.namespace.__getattr__("theta_vib", species_index + 1)
-    
+
     def _nasa_polynomial_interval_bounds(self, species_index):
         """Return NASA poly interval temperature bounds."""
         return self.namespace.__getattr__("nasa_temp_bounds", species_index)
@@ -447,11 +467,16 @@ class PlatoMechanism(BaseMechanism):
             self, species_index: int
     ) -> Tuple[Tuple[List[int], List[int]], Tuple[List[int], List[int]]]:
         fwd_set, rev_set = self.participation_set(species_index)
-        # Count actual occurrences: homoatomic dissociation (e.g. N2->N+N) gives stoich 2
-        stoich_fwd = [self._reactions[r]["reactant_species"].count(species_index)
-                      for r in fwd_set]
-        stoich_rev = [self._reactions[r]["product_species"].count(species_index)
-                      for r in rev_set]
+        # Count actual occurrences: homoatomic dissociation (e.g. N2->N+N)
+        # gives stoich 2
+        stoich_fwd = [
+            self._reactions[r]["reactant_species"].count(species_index)
+            for r in fwd_set
+        ]
+        stoich_rev = [
+            self._reactions[r]["product_species"].count(species_index)
+            for r in rev_set
+        ]
         return (fwd_set, rev_set), (stoich_fwd, stoich_rev)
 
     # }}}
@@ -547,7 +572,8 @@ class PlatoMechanism(BaseMechanism):
     ) -> SpeciesVibrationalThermo:
         vib_temp = self.species_vibrational_temperature(species_index)
         return make_species_vibrational_thermo(
-            self.namespace.gas_constant / self.molecular_weights[species_index],
+            (self.namespace.gas_constant
+             / self.molecular_weights[species_index]),
             vib_temp
         )
 
@@ -556,7 +582,9 @@ class PlatoMechanism(BaseMechanism):
         millikan_white_a = self.namespace.vt_mw_a()[vt_molecule_index, :]
         millikan_white_b = self.namespace.vt_mw_b()[vt_molecule_index, :]
         park_cross_section = self.namespace.vt_park_sigma()[vt_molecule_index]
-        reduced_molar_mass_sqrt = self.namespace.vt_sqrmu()[vt_molecule_index, :]
+        reduced_molar_mass_sqrt = (
+            self.namespace.vt_sqrmu()[vt_molecule_index, :]
+        )
         return [
             pairwise_relaxation_time_expr(
                 millikan_white_a[heavy_partner_index],
@@ -569,7 +597,8 @@ class PlatoMechanism(BaseMechanism):
             for heavy_partner_index in range(self.namespace.n_heavy)
         ]
 
-    def make_vt_energy_transfer_expr(self, vt_molecule_index) -> p.ExpressionNode:
+    def make_vt_energy_transfer_expr(self,
+                                     vt_molecule_index) -> p.ExpressionNode:
         from pymbolic import substitute
         mass_fractions = Variable("mass_fractions")
         heavy_species_indices = [
@@ -581,18 +610,16 @@ class PlatoMechanism(BaseMechanism):
             / self.molecular_weights[heavy_species_index]
             for heavy_species_index in heavy_species_indices
         ]
-        heavy_temperature = Variable("temperature")[0]
-        mixture_molecular_weight_inverse = sum(
-            mass_fractions[species_index] / self.molecular_weights[species_index]
-            for species_index in range(self.num_species)
-        )
         mean_relaxation_rate = vt_mean_relaxation_rate_expr(
             Variable("pressure"),
             heavy_partner_mole_ratios,
             self.make_vt_relaxation_time_exprs(vt_molecule_index)
         )
 
-        species_index = int(self.namespace.vt_molecule_ids()[vt_molecule_index]) - 1
+        species_index = (
+            int(self.namespace.vt_molecule_ids()[vt_molecule_index])
+            - 1
+        )
         vibrational_thermo = self.species_vib_thermo_expressions[species_index]
         vibrational_energy_at_vib_temperature = vibrational_thermo.energy_expr
         vibrational_energy_at_heavy_temperature = substitute(
@@ -608,7 +635,9 @@ class PlatoMechanism(BaseMechanism):
             mean_relaxation_rate,
         )
 
-    def make_translational_rotational_energy_expr(self, species_index) -> p.ExpressionNode:
+    def make_translational_rotational_energy_expr(
+            self,
+            species_index) -> p.ExpressionNode:
         heavy_temperature = Variable("temperature")[0]
         return translational_rotational_energy_expr(
             self.translational_rotational_specific_heat_cv[species_index],
@@ -617,14 +646,17 @@ class PlatoMechanism(BaseMechanism):
             heavy_temperature,
         )
 
-    def make_nasa_polynomial_vibrational_energy_expr(self, species_index) -> p.ExpressionNode:
+    def make_nasa_polynomial_vibrational_energy_expr(
+            self,
+            species_index) -> p.ExpressionNode:
         from pymbolic import substitute
         vibrational_temperature = Variable("temperature")[1]
         specific_gas_constant = (
             self.namespace.gas_constant / self.molecular_weights[species_index]
         )
+        nasa_poly = self.species_nasa_thermo_polynomials
         enthalpy_rt_at_vibrational_temperature = substitute(
-            self.species_nasa_thermo_polynomials[species_index].enthalpy_poly.expr,
+            nasa_poly[species_index].enthalpy_poly.expr,
             {Variable("temperature")[0]: vibrational_temperature}
         )
         return nasa_polynomial_vibrational_energy_expr(
@@ -636,7 +668,9 @@ class PlatoMechanism(BaseMechanism):
             vibrational_temperature,
         )
 
-    def make_nasa_polynomial_vibrational_specific_heat_expr(self, species_index) -> p.ExpressionNode:
+    def make_nasa_polynomial_vibrational_specific_heat_expr(
+            self,
+            species_index) -> p.ExpressionNode:
         from pymbolic import substitute
         vibrational_temperature = Variable("temperature")[1]
         specific_gas_constant = (

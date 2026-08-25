@@ -8,6 +8,11 @@ from pyrometheus.bandit.general_thermochem import BaseMechanism
 class CodeGenerationOptions:
     scalar_type: Optional[str] = None
     directive_offload: Optional[str] = None
+    # Opt-in: generate get_net_production_rates_jacobian by composing the
+    # full chemistry graph and differentiating it symbolically. Off by
+    # default -- see BaseMechanism.make_species_production_rate_jacobian
+    # for the cost tradeoff.
+    compute_jacobian: bool = False
 
 
 class CodeGenerator:

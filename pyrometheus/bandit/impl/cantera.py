@@ -57,7 +57,7 @@ class CanteraMechanism(BaseMechanism):
 
     def is_reversible(self, reaction_index: int) -> bool:
         return self.reaction(reaction_index).reversible
-    
+
     def species(self, species_index: int) -> ct.Species:
         return self.namespace.__getattr__("species", species_index)
 
@@ -185,3 +185,6 @@ class CanteraMechanism(BaseMechanism):
             stoich_coeffs[0],
             stoich_coeffs[1]
         )
+
+    def make_equilibrium_constant(self, reaction_index):
+        raise NotImplementedError

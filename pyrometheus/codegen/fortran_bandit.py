@@ -700,6 +700,33 @@ contains
 
     end subroutine get_net_production_rates
 
+    %if opts.compute_jacobian:
+    subroutine get_net_production_rates_jacobian(&
+        & density, temperature, mass_fractions, jacobian)
+
+        GPU_ROUTINE(get_net_production_rates_jacobian)
+
+        ! jacobian(i, j) = d(omega(i)) / d(x(j)), with x ordered as
+        ! [density, temperature(1..num_temperatures),
+        ! mass_fractions(1..num_species)] -- see
+        ! BaseMechanism._species_production_rate_jacobian_wrt_vars.
+        ${real_type}, intent(in) :: density
+        ${temperature_decl(real_type, bandit_mech)}
+        ${real_type}, intent(in),  dimension(${bandit_mech.num_species}) :: &
+            mass_fractions
+        ${real_type}, intent(out), dimension( &
+            ${bandit_mech.num_species}, &
+            ${1 + bandit_mech.num_temp + bandit_mech.num_species}) :: jacobian
+
+        %for i, row in enumerate(bandit_mech.species_production_rate_jacobian_exprs):
+        %for j, entry in enumerate(row):
+        jacobian(${i+1}, ${j+1}) = ${cgm(entry)}
+        %endfor
+        %endfor
+
+    end subroutine get_net_production_rates_jacobian
+
+    %endif
     %if bandit_mech.has_nonequilibrium_energy_modes():
     subroutine get_species_vibrational_energies(temperature, e_v)
 
@@ -842,8 +869,12 @@ class FortranBanditCodeGenerator(CodeGenerator):
 #define GPU_ROUTINE(name) ! name
 """
 
+        if opts.compute_jacobian:
+            bandit_mech.make_species_production_rate_jacobian()
+
         return wrap_code(module_tpl.render(
             bandit_mech=bandit_mech,
+            opts=opts,
 
             str_np=str_np,
             cgm=FortranExpressionMapper(),

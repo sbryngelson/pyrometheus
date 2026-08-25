@@ -59,7 +59,16 @@ class BaseMechanism:
     nasa_polynomial_vibrational_specific_heat_exprs: np.ndarray = np.empty(
         shape=(0,), dtype=p.ExpressionNode
     )
+    species_production_rate_jacobian_exprs: np.ndarray = np.empty(
+        shape=(0,), dtype=object
+    )
     param_vals: np.ndarray = np.empty(shape=(0,), dtype=np.float64)
+
+    # Composing the full chemistry graph and differentiating it (see
+    # make_species_production_rate_jacobian) gets slower than the staged
+    # primal evaluation as a mechanism grows; this is only a hint used to
+    # warn callers, not a hard limit.
+    _jacobian_species_warning_threshold = 50
 
     def __init__(self):
         pass
@@ -75,6 +84,15 @@ class BaseMechanism:
     def num_reactions(self):
         """
         :returns: The number of reactions in the mechanism.
+        """
+        raise NotImplementedError
+
+    @property
+    def num_temp(self):
+        """
+        :returns: The number of temperatures carried by the mechanism (1
+            for single-temperature thermochemistry, >1 for multi-
+            temperature/nonequilibrium mechanisms).
         """
         raise NotImplementedError
 
@@ -330,6 +348,118 @@ class BaseMechanism:
                 self.vt_energy_transfer_exprs,
                 self.make_vt_energy_transfer_expr(vt_molecule_index)
             )
+
+    def _compose_species_production_rate_graph(self):
+        """Fully substitute the staged placeholder arrays
+        (``concentrations``, ``k_fwd``, ``log_k_eq``, ``r_net``) with the
+        actual upstream expressions already stored on this mechanism --
+        the same expressions codegen renders, just composed into one
+        graph per species instead of staged, so the whole thing can be
+        differentiated in one pass.
+
+        :returns: A list of :class:`pymbolic.primitives.ExpressionNode`,
+            one per species, in terms of ``density``, ``temperature``
+            (bare, or indexed if :attr:`num_temp` > 1), and
+            ``mass_fractions`` only.
+        """
+        from pymbolic import substitute
+
+        conc = p.Variable("concentrations")
+        k_fwd = p.Variable("k_fwd")
+        log_k_eq = p.Variable("log_k_eq")
+        gibbs_rt = p.Variable("gibbs_rt")
+        r_net = p.Variable("r_net")
+        density = p.Variable("density")
+        mass_fractions = p.Variable("mass_fractions")
+
+        conc_subst = {
+            conc[k]: density * mass_fractions[k] / self.molecular_weights[k]
+            for k in range(self.num_species)
+        }
+        # equil_constants[j] is itself staged one level deeper, in terms
+        # of per-species Gibbs energy placeholders (see
+        # chem_expr/thermo.py:equilibrium_constant_expr) -- substitute
+        # those with the actual NASA-polynomial Gibbs expressions before
+        # folding equil_constants into rate_subst below.
+        gibbs_subst = {
+            gibbs_rt[i]: self.species_nasa_thermo_polynomials[i].gibbs_poly.expr
+            for i in range(self.num_species)
+        }
+        rate_subst = {
+            k_fwd[j]: self.rate_coeffs[j].expr
+            for j in range(self.num_reactions)
+        }
+        rate_subst.update({
+            log_k_eq[j]: substitute(self.equil_constants[j], gibbs_subst)
+            for j in range(self.num_reactions)
+        })
+        r_net_subst = {
+            r_net[j]: substitute(
+                substitute(self.mass_action_rates[j], rate_subst),
+                conc_subst
+            )
+            for j in range(self.num_reactions)
+        }
+
+        return [
+            substitute(self.species_prod_rates[i], r_net_subst)
+            for i in range(self.num_species)
+        ]
+
+    def _species_production_rate_jacobian_wrt_vars(self):
+        """:returns: The ordered list of state-variable leaves the
+        species-production-rate Jacobian is differentiated against:
+        density, then each temperature, then each mass fraction. This
+        ordering is the column order of
+        :attr:`species_production_rate_jacobian_exprs` and of
+        ``get_net_production_rates_jacobian`` in generated code.
+        """
+        density = p.Variable("density")
+        mass_fractions = p.Variable("mass_fractions")
+        if self.num_temp == 1:
+            temperature_vars = [p.Variable("temperature")]
+        else:
+            temperature_vars = [
+                p.Variable("temperature")[t] for t in range(self.num_temp)
+            ]
+        return (
+            [density] + temperature_vars
+            + [mass_fractions[k] for k in range(self.num_species)]
+        )
+
+    def make_species_production_rate_jacobian(self):
+        """Compose the full species-production-rate graph and
+        differentiate it, symbolically, w.r.t. density, each
+        temperature, and each mass fraction. Populates
+        :attr:`species_production_rate_jacobian_exprs` with shape
+        ``(num_species, 1 + num_temp + num_species)``.
+
+        This is opt-in: unlike :meth:`make_rates`/:meth:`make_thermo`,
+        it is not called automatically, because composing collapses the
+        staged/shared intermediate arrays the rest of this class keeps
+        separate, and symbolic differentiation cost grows with mechanism
+        size -- callers (or code generators, via
+        ``CodeGenerationOptions.compute_jacobian``) ask for this
+        explicitly.
+        """
+        if self.num_species > self._jacobian_species_warning_threshold:
+            import warnings
+            warnings.warn(
+                f"Composing and differentiating the analytic "
+                f"species-production-rate Jacobian for "
+                f"{self.num_species} species may be slow -- symbolic "
+                f"differentiation cost grows with mechanism size.",
+                stacklevel=2,
+            )
+
+        from pyrometheus.bandit.chem_expr.jacobian import jacobian_row
+
+        composed = self._compose_species_production_rate_graph()
+        wrt_vars = self._species_production_rate_jacobian_wrt_vars()
+        self.species_production_rate_jacobian_exprs = np.array(
+            [jacobian_row(w_dot_i, wrt_vars) for w_dot_i in composed],
+            dtype=object,
+        )
 
     def make_pyro(self, pyro_np=np):
         """
