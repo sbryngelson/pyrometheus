@@ -68,7 +68,7 @@ class BaseMechanism:
     # make_species_production_rate_jacobian) gets slower than the staged
     # primal evaluation as a mechanism grows; this is only a hint used to
     # warn callers, not a hard limit.
-    _jacobian_species_warning_threshold = 50
+    _jac_warning_threshold = 50
 
     def __init__(self):
         pass
@@ -429,7 +429,7 @@ class BaseMechanism:
 
     def make_species_production_rate_jacobian(self):
         """Compose the full species-production-rate graph and
-        differentiate it, symbolically, w.r.t. density, each
+        differentiate it symbolically, w.r.t. density, each
         temperature, and each mass fraction. Populates
         :attr:`species_production_rate_jacobian_exprs` with shape
         ``(num_species, 1 + num_temp + num_species)``.
@@ -442,7 +442,7 @@ class BaseMechanism:
         ``CodeGenerationOptions.compute_jacobian``) ask for this
         explicitly.
         """
-        if self.num_species > self._jacobian_species_warning_threshold:
+        if self.num_species > self._jac_warning_threshold:
             import warnings
             warnings.warn(
                 f"Composing and differentiating the analytic "
