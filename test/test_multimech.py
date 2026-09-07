@@ -31,6 +31,14 @@ def test_single_mechanism_list_form_is_identical(mechname):
     actual = pyro.FortranCodeGenerator.generate(
         "m_thermochem", [_sol(mechname)], pyro.CodeGenerationOptions())
     assert actual == expected
+    # specialized form: no runtime selection machinery
+    assert "mech_id" not in actual
+    assert "select case (mech_id)" not in actual
+    nsp = _sol(mechname).n_species
+    assert f"integer, parameter :: num_species = {nsp}" in actual
+    # ...but num_species_max is exported here too, so MFC sizes arrays with one
+    # spelling in both forms.
+    assert f"integer, parameter :: num_species_max = {nsp}" in actual
 
 
 def test_multi_mechanism_preamble():
@@ -46,9 +54,10 @@ def test_multi_mechanism_preamble():
     assert "subroutine set_mechanism" in src
 
     single = reference_source("uiuc")
-    assert "num_species_max" not in single
     assert "mech_id" not in single
+    assert "select case (mech_id)" not in single
     assert "integer, parameter :: num_species = 7" in single
+    assert "integer, parameter :: num_species_max = 7" in single
 
 
 def test_routine_body_branches_on_mech_id():

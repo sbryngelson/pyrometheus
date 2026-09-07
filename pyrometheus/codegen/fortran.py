@@ -268,6 +268,9 @@ module ${module_name}
     %else:
     integer, parameter :: num_elements = ${sol.n_elements}
     integer, parameter :: num_species = ${sol.n_species}
+    ! Always exported so consumers can size arrays with one spelling regardless
+    ! of whether this module was generated in specialized or selectable form.
+    integer, parameter :: num_species_max = ${sol.n_species}
     integer, parameter :: num_reactions = ${sol.n_reactions}
     integer, parameter :: num_falloff = ${len(falloff_reactions)}
     ${real_type}, parameter :: one_atm = ${float_to_fortran(ct.one_atm)}
