@@ -1,5 +1,7 @@
 """Multi-mechanism Fortran codegen: N=1 identity and N>1 selection."""
 import os
+import subprocess
+import tempfile
 
 import cantera as ct
 import pytest
@@ -64,3 +66,39 @@ def test_routine_body_branches_on_mech_id():
     # Arms must inline expressions, never call out -- a device routine calling
     # another device routine faults at runtime under CCE OpenMP.
     assert "call " not in body
+
+
+def _build_and_run(source, driver, args, tmp):
+    """Compile the generated module against a driver and return its numbers."""
+    open(os.path.join(tmp, "m_thermochem.f90"), "w").write(source)
+    open(os.path.join(tmp, "drv.f90"), "w").write(open(driver).read())
+    subprocess.run(["gfortran", "-cpp", "-ffree-line-length-none", "-O1",
+                    "m_thermochem.f90", "drv.f90", "-o", "drv"],
+                   cwd=tmp, check=True)
+    out = subprocess.run(["./drv"] + args, cwd=tmp, capture_output=True,
+                         text=True, check=True)
+    return [float(x) for x in out.stdout.split()]
+
+
+BUNDLE = ["uiuc", "sandiego", "hong"]
+
+
+@pytest.mark.parametrize("mechname", BUNDLE)
+def test_arm_matches_single_mechanism(mechname):
+    """Each arm must reproduce the dedicated single-mechanism generator exactly."""
+    here = os.path.dirname(__file__)
+    multi = pyro.FortranCodeGenerator.generate(
+        "m_thermochem", [_sol(m) for m in BUNDLE],
+        pyro.CodeGenerationOptions())
+
+    with tempfile.TemporaryDirectory() as w:
+        got = _build_and_run(multi, os.path.join(here, "multimech_driver.f90"),
+                             [mechname], w)
+    with tempfile.TemporaryDirectory() as w:
+        expected = _build_and_run(reference_source(mechname),
+                                  os.path.join(here, "singlemech_driver.f90"),
+                                  [], w)
+
+    assert len(got) == len(expected)
+    for a, b in zip(got, expected):
+        assert abs(a - b) <= 1e-13 * max(1.0, abs(b))

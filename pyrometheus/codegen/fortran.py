@@ -247,16 +247,27 @@ module ${module_name}
     integer, parameter :: sp = selected_real_kind(6,37)   ! Single precision
     integer, parameter :: dp = selected_real_kind(15,307) ! Double precision
 
-    integer, parameter :: num_elements = ${sol.n_elements}
     %if multi:
     integer, parameter :: num_species_max = ${num_species_max}
     integer, parameter :: num_reactions_max = ${num_reactions_max}
+    integer, parameter :: num_elements_max = ${num_elements_max}
     integer, parameter :: num_mechanisms = ${len(mechs)}
     integer :: num_species = ${mechs[0]["sol"].n_species}
+    integer :: num_reactions = ${mechs[0]["sol"].n_reactions}
+    integer :: num_elements = ${mechs[0]["sol"].n_elements}
+    integer :: num_falloff = ${len(mechs[0]["falloff"])}
     integer :: mech_id = 1
+    ${real_type}, parameter :: one_atm = ${float_to_fortran(ct.one_atm)}
+    ${real_type}, parameter :: gas_constant = ${float_to_fortran(ct.gas_constant)}
+    ! Filled by set_mechanism, so every reference in the routine bodies below is
+    ! spelled exactly as it is in single-mechanism output.
+    ${real_type} :: molecular_weights(${num_species_max})
+    ${real_type} :: inv_molecular_weights(${num_species_max})
+    character(len=12) :: species_names(${num_species_max})
+    character(len=4) :: element_names(${num_elements_max})
     %else:
+    integer, parameter :: num_elements = ${sol.n_elements}
     integer, parameter :: num_species = ${sol.n_species}
-    %endif
     integer, parameter :: num_reactions = ${sol.n_reactions}
     integer, parameter :: num_falloff = ${len(falloff_reactions)}
     ${real_type}, parameter :: one_atm = ${float_to_fortran(ct.one_atm)}
@@ -271,6 +282,7 @@ module ${module_name}
 
     character(len=4), parameter :: element_names(${sol.n_elements}) = &
         (/ ${", ".join('"'+'{0: <4}'.format(e)+'"' for e in sol.element_names)} /)
+    %endif
 
 contains
 
@@ -286,6 +298,17 @@ contains
         case ("${m["name"]}")
             mech_id = ${m["id"]}
             num_species = ${m["sol"].n_species}
+            num_reactions = ${m["sol"].n_reactions}
+            num_elements = ${m["sol"].n_elements}
+            num_falloff = ${len(m["falloff"])}
+            molecular_weights(1:${m["sol"].n_species}) = &
+                (/ ${str_np(m["sol"].molecular_weights)} /)
+            inv_molecular_weights(1:${m["sol"].n_species}) = &
+                (/ ${str_np(1/m["sol"].molecular_weights)} /)
+            species_names(1:${m["sol"].n_species}) = &
+                (/ ${", ".join('"'+'{0: <12}'.format(x)+'"' for x in m["sol"].species_names)} /)
+            element_names(1:${m["sol"].n_elements}) = &
+                (/ ${", ".join('"'+'{0: <4}'.format(x)+'"' for x in m["sol"].element_names)} /)
         %endfor
         case default
             status = -1
@@ -337,19 +360,31 @@ contains
 
     end subroutine get_element_index
 
-    subroutine get_specific_gas_constant(mass_fractions, specific_gas_constant)
-
-        GPU_ROUTINE(get_specific_gas_constant)
-
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out) :: specific_gas_constant
-
+<%def name="_body_get_specific_gas_constant(sol, falloff_reactions, three_body_reactions)">
         specific_gas_constant = gas_constant * ( &
                 %for i in range(sol.n_species):
                     + inv_molecular_weights(${i+1})*mass_fractions(${i+1}) &
                 %endfor
                 )
 
+</%def>
+    subroutine get_specific_gas_constant(mass_fractions, specific_gas_constant)
+
+        GPU_ROUTINE(get_specific_gas_constant)
+
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out) :: specific_gas_constant
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_specific_gas_constant(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_specific_gas_constant(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_specific_gas_constant
 
     subroutine get_density(pressure, temperature, mass_fractions, density)
@@ -358,7 +393,7 @@ contains
 
         ${real_type}, intent(in) :: pressure
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
         ${real_type}, intent(out) :: density
 
         ${real_type} :: mix_mol_weight
@@ -374,7 +409,7 @@ contains
 
         ${real_type}, intent(in) :: density
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
         ${real_type}, intent(out) :: pressure
 
         ${real_type} :: mix_mol_weight
@@ -384,60 +419,88 @@ contains
 
     end subroutine get_pressure
 
-    subroutine get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
-
-        GPU_ROUTINE(get_mixture_molecular_weight)
-
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out) :: mix_mol_weight
-
+<%def name="_body_get_mixture_molecular_weight(sol, falloff_reactions, three_body_reactions)">
         mix_mol_weight = 1.0d0 / ( &
                 %for i in range(sol.n_species):
                     + inv_molecular_weights(${i+1})*mass_fractions(${i+1}) &
                 %endfor
                 )
 
+</%def>
+    subroutine get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
+
+        GPU_ROUTINE(get_mixture_molecular_weight)
+
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out) :: mix_mol_weight
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_mixture_molecular_weight(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_mixture_molecular_weight(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_mixture_molecular_weight
 
-    subroutine get_concentrations(density, mass_fractions, concentrations)
-
-        GPU_ROUTINE(get_concentrations)
-
-        ${real_type}, intent(in) :: density
-        ${real_type}, intent(in),  dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: concentrations
-
+<%def name="_body_get_concentrations(sol, falloff_reactions, three_body_reactions)">
         %for i in range(sol.n_species):
             concentrations(${i+1}) = density * &
                 inv_molecular_weights(${i+1}) * mass_fractions(${i+1})
         %endfor
 
+</%def>
+    subroutine get_concentrations(density, mass_fractions, concentrations)
+
+        GPU_ROUTINE(get_concentrations)
+
+        ${real_type}, intent(in) :: density
+        ${real_type}, intent(in),  dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: concentrations
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_concentrations(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_concentrations(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_concentrations
 
-    subroutine get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
-
-        GPU_ROUTINE(get_mole_fractions)
-
-        ${real_type}, intent(in) :: mix_mol_weight
-        ${real_type}, intent(in),  dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: mole_fractions
-
+<%def name="_body_get_mole_fractions(sol, falloff_reactions, three_body_reactions)">
         %for i in range(sol.n_species):
             mole_fractions(${i+1}) = inv_molecular_weights(${i+1}) * &
                 mass_fractions(${i+1}) * mix_mol_weight
         %endfor
 
+</%def>
+    subroutine get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
+
+        GPU_ROUTINE(get_mole_fractions)
+
+        ${real_type}, intent(in) :: mix_mol_weight
+        ${real_type}, intent(in),  dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: mole_fractions
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_mole_fractions(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_mole_fractions(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_mole_fractions
 
-    subroutine get_mass_averaged_property(&
-        & mass_fractions, spec_property, mix_property)
-
-        GPU_ROUTINE(get_mass_averaged_property)
-
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: spec_property
-        ${real_type}, intent(out) :: mix_property
-
+<%def name="_body_get_mass_averaged_property(sol, falloff_reactions, three_body_reactions)">
         mix_property =  ( &
             %for i in range(sol.n_species):
                 + inv_molecular_weights(${i+1})*mass_fractions(${i+1}) &
@@ -445,6 +508,26 @@ contains
             %endfor
         )
 
+</%def>
+    subroutine get_mass_averaged_property(&
+        & mass_fractions, spec_property, mix_property)
+
+        GPU_ROUTINE(get_mass_averaged_property)
+
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: spec_property
+        ${real_type}, intent(out) :: mix_property
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_mass_averaged_property(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_mass_averaged_property(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_mass_averaged_property
 
     subroutine get_mixture_specific_heat_cp_mass(temperature, mass_fractions, cp_mix)
@@ -452,10 +535,10 @@ contains
         GPU_ROUTINE(get_mixture_specific_heat_cp_mass)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
         ${real_type}, intent(out) :: cp_mix
 
-        ${real_type}, dimension(${sol.n_species}) :: cp0_r
+        ${real_type}, dimension(${ns_dim}) :: cp0_r
 
         call get_species_specific_heats_r(temperature, cp0_r)
         call get_mass_averaged_property(mass_fractions, cp0_r, cp_mix)
@@ -463,16 +546,7 @@ contains
 
     end subroutine get_mixture_specific_heat_cp_mass
 
-    subroutine get_mixture_specific_heat_cv_mass(temperature, mass_fractions, cv_mix)
-
-        GPU_ROUTINE(get_mixture_specific_heat_cv_mass)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out) :: cv_mix
-
-        ${real_type}, dimension(${sol.n_species}) :: cp0_r
-
+<%def name="_body_get_mixture_specific_heat_cv_mass(sol, falloff_reactions, three_body_reactions)">
         call get_species_specific_heats_r(temperature, cp0_r)
 
         %for i in range(sol.n_species):
@@ -482,6 +556,27 @@ contains
         call get_mass_averaged_property(mass_fractions, cp0_r, cv_mix)
         cv_mix = cv_mix * gas_constant
 
+</%def>
+    subroutine get_mixture_specific_heat_cv_mass(temperature, mass_fractions, cv_mix)
+
+        GPU_ROUTINE(get_mixture_specific_heat_cv_mass)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out) :: cv_mix
+
+        ${real_type}, dimension(${ns_dim}) :: cp0_r
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_mixture_specific_heat_cv_mass(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_mixture_specific_heat_cv_mass(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_mixture_specific_heat_cv_mass
 
     subroutine get_mixture_enthalpy_mass(temperature, mass_fractions, h_mix)
@@ -489,10 +584,10 @@ contains
         GPU_ROUTINE(get_mixture_enthalpy_mass)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
         ${real_type}, intent(out) :: h_mix
 
-        ${real_type}, dimension(${sol.n_species}) :: h0_rt
+        ${real_type}, dimension(${ns_dim}) :: h0_rt
 
         call get_species_enthalpies_rt(temperature, h0_rt)
         call get_mass_averaged_property(mass_fractions, h0_rt, h_mix)
@@ -500,16 +595,7 @@ contains
 
     end subroutine get_mixture_enthalpy_mass
 
-    subroutine get_mixture_energy_mass(temperature, mass_fractions, e_mix)
-
-        GPU_ROUTINE(get_mixture_energy_mass)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out) :: e_mix
-
-        ${real_type}, dimension(${sol.n_species}) :: h0_rt
-
+<%def name="_body_get_mixture_energy_mass(sol, falloff_reactions, three_body_reactions)">
         call get_species_enthalpies_rt(temperature, h0_rt)
 
         %for i in range(sol.n_species):
@@ -519,70 +605,105 @@ contains
         call get_mass_averaged_property(mass_fractions, h0_rt, e_mix)
         e_mix = e_mix * gas_constant * temperature
 
+</%def>
+    subroutine get_mixture_energy_mass(temperature, mass_fractions, e_mix)
+
+        GPU_ROUTINE(get_mixture_energy_mass)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out) :: e_mix
+
+        ${real_type}, dimension(${ns_dim}) :: h0_rt
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_mixture_energy_mass(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_mixture_energy_mass(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_mixture_energy_mass
 
+<%def name="_body_get_species_specific_heats_r(sol, falloff_reactions, three_body_reactions)">
+        %for i, sp in enumerate(sol.species()):
+        cp0_r(${i+1}) = ${cgm(ce.poly_to_expr(sp.thermo, "temperature"))}
+        %endfor
+
+</%def>
     subroutine get_species_specific_heats_r(temperature, cp0_r)
 
         GPU_ROUTINE(get_species_specific_heats_r)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: cp0_r
+        ${real_type}, intent(out), dimension(${ns_dim}) :: cp0_r
 
-        %for i, sp in enumerate(sol.species()):
-        cp0_r(${i+1}) = ${cgm(ce.poly_to_expr(sp.thermo, "temperature"))}
-        %endfor
-
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_specific_heats_r(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_specific_heats_r(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_species_specific_heats_r
 
+<%def name="_body_get_species_enthalpies_rt(sol, falloff_reactions, three_body_reactions)">
+        %for i, sp in enumerate(sol.species()):
+        h0_rt(${i+1}) = ${cgm(ce.poly_to_enthalpy_expr(sp.thermo, "temperature"))}
+        %endfor
+
+</%def>
     subroutine get_species_enthalpies_rt(temperature, h0_rt)
 
         GPU_ROUTINE(get_species_enthalpies_rt)
 
         ${real_type}, intent(in) :: temperature
-        %if multi:
-        ${real_type}, intent(out), dimension(num_species_max) :: h0_rt
+        ${real_type}, intent(out), dimension(${ns_dim}) :: h0_rt
 
+%if multi:
         select case (mech_id)
-        %for m in mechs:
-        case (${m["id"]})
-            %for i, sp in enumerate(m["sol"].species()):
-            h0_rt(${i+1}) = ${cgm(ce.poly_to_enthalpy_expr(sp.thermo, "temperature"))}
-            %endfor
-        %endfor
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_enthalpies_rt(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
         end select
-        %else:
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: h0_rt
-
-        %for i, sp in enumerate(sol.species()):
-        h0_rt(${i+1}) = ${cgm(ce.poly_to_enthalpy_expr(sp.thermo, "temperature"))}
-        %endfor
-        %endif
-
+%else:
+${_body_get_species_enthalpies_rt(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_species_enthalpies_rt
 
+<%def name="_body_get_species_entropies_r(sol, falloff_reactions, three_body_reactions)">
+        %for i, sp in enumerate(sol.species()):
+        s0_r(${i+1}) = ${cgm(ce.poly_to_entropy_expr(sp.thermo, "temperature"))}
+        %endfor
+
+</%def>
     subroutine get_species_entropies_r(temperature, s0_r)
 
         GPU_ROUTINE(get_species_entropies_r)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: s0_r
+        ${real_type}, intent(out), dimension(${ns_dim}) :: s0_r
 
-        %for i, sp in enumerate(sol.species()):
-        s0_r(${i+1}) = ${cgm(ce.poly_to_entropy_expr(sp.thermo, "temperature"))}
-        %endfor
-
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_entropies_r(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_entropies_r(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_species_entropies_r
 
-    subroutine get_species_gibbs_rt(temperature, g0_rt)
-
-        GPU_ROUTINE(get_species_gibbs_rt)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: g0_rt
-
-        ${real_type}, dimension(${sol.n_species}) :: h0_rt
-        ${real_type}, dimension(${sol.n_species}) :: s0_r
-
+<%def name="_body_get_species_gibbs_rt(sol, falloff_reactions, three_body_reactions)">
         call get_species_enthalpies_rt(temperature, h0_rt)
         call get_species_entropies_r(temperature, s0_r)
 
@@ -590,20 +711,30 @@ contains
             g0_rt(${i+1}) = h0_rt(${i+1}) - s0_r(${i+1})
         %endfor
 
-    end subroutine get_species_gibbs_rt
+</%def>
+    subroutine get_species_gibbs_rt(temperature, g0_rt)
 
-    subroutine get_equilibrium_constants(temperature, k_eq)
-
-        GPU_ROUTINE(get_equilibrium_constants)
+        GPU_ROUTINE(get_species_gibbs_rt)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_reactions}) :: k_eq
+        ${real_type}, intent(out), dimension(${ns_dim}) :: g0_rt
 
-        ${real_type} :: rt
-        ${real_type} :: c0
+        ${real_type}, dimension(${ns_dim}) :: h0_rt
+        ${real_type}, dimension(${ns_dim}) :: s0_r
 
-        ${real_type}, dimension(${sol.n_species}) :: g0_rt
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_gibbs_rt(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_gibbs_rt(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_species_gibbs_rt
 
+<%def name="_body_get_equilibrium_constants(sol, falloff_reactions, three_body_reactions)">
         rt = gas_constant * temperature
         c0 = log(one_atm/rt)
 
@@ -618,6 +749,29 @@ contains
         %endif
         %endfor
 
+</%def>
+    subroutine get_equilibrium_constants(temperature, k_eq)
+
+        GPU_ROUTINE(get_equilibrium_constants)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(out), dimension(${nr_dim}) :: k_eq
+
+        ${real_type} :: rt
+        ${real_type} :: c0
+
+        ${real_type}, dimension(${ns_dim}) :: g0_rt
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_equilibrium_constants(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_equilibrium_constants(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_equilibrium_constants
 
     subroutine get_temperature( &
@@ -628,7 +782,7 @@ contains
         logical, intent(in) :: do_energy
         ${real_type}, intent(in)  :: enthalpy_or_energy
         ${real_type}, intent(in)  :: t_guess
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
         ${real_type}, intent(out) :: temperature
 
         integer :: iter
@@ -666,22 +820,8 @@ contains
 
     end subroutine get_temperature
 
-    %if falloff_reactions:
-    subroutine get_falloff_rates(temperature, concentrations, k_fwd)
-
-        GPU_ROUTINE(get_falloff_rates)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: concentrations
-        ${real_type}, intent(out), dimension(${sol.n_reactions}) :: k_fwd
-
-        ${real_type}, dimension(${len(falloff_reactions)}) :: k_high
-        ${real_type}, dimension(${len(falloff_reactions)}) :: k_low
-        ${real_type}, dimension(${len(falloff_reactions)}) :: reduced_pressure
-        ${real_type}, dimension(${len(falloff_reactions)}) :: falloff_center
-        ${real_type}, dimension(${len(falloff_reactions)}) :: falloff_factor
-        ${real_type}, dimension(${len(falloff_reactions)}) :: falloff_function
-
+    %if any_falloff:
+<%def name="_body_get_falloff_rates(sol, falloff_reactions, three_body_reactions)">
         %for i, (_, react) in enumerate(falloff_reactions):
         k_high(${i+1}) = ${cgm(ce.rate_coefficient_expr(
                                 react.rate.high_rate,
@@ -723,21 +863,36 @@ contains
             reduced_pressure(${i+1})/(1.d0 + reduced_pressure(${i+1}))
         %endfor
 
+</%def>
+    subroutine get_falloff_rates(temperature, concentrations, k_fwd)
+
+        GPU_ROUTINE(get_falloff_rates)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: concentrations
+        ${real_type}, intent(out), dimension(${nr_dim}) :: k_fwd
+
+        ${real_type}, dimension(${nf_dim}) :: k_high
+        ${real_type}, dimension(${nf_dim}) :: k_low
+        ${real_type}, dimension(${nf_dim}) :: reduced_pressure
+        ${real_type}, dimension(${nf_dim}) :: falloff_center
+        ${real_type}, dimension(${nf_dim}) :: falloff_factor
+        ${real_type}, dimension(${nf_dim}) :: falloff_function
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_falloff_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_falloff_rates(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_falloff_rates
 
     %endif
-    subroutine get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
-
-        GPU_ROUTINE(get_fwd_rate_coefficients)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: concentrations
-        ${real_type}, intent(out), dimension(${sol.n_reactions}) :: k_fwd
-
-        %if falloff_reactions:
-        ${real_type}, dimension(${len(falloff_reactions)}) :: k_falloff
-        %endif
-
+<%def name="_body_get_fwd_rate_coefficients(sol, falloff_reactions, three_body_reactions)">
         %for i, react in enumerate(sol.reactions()):
         %if react.equation in [r.equation for _, r in falloff_reactions]:
         k_fwd(${i+1}) = 0.d0
@@ -757,19 +912,32 @@ contains
         call get_falloff_rates(temperature, concentrations, k_fwd)
         %endif
 
-    end subroutine get_fwd_rate_coefficients
+</%def>
+    subroutine get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
 
-    subroutine get_net_rates_of_progress(temperature, concentrations, r_net)
-
-        GPU_ROUTINE(get_net_rates_of_progress)
+        GPU_ROUTINE(get_fwd_rate_coefficients)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: concentrations
-        ${real_type}, intent(out), dimension(${sol.n_reactions}) :: r_net
+        ${real_type}, intent(in), dimension(${ns_dim}) :: concentrations
+        ${real_type}, intent(out), dimension(${nr_dim}) :: k_fwd
 
-        ${real_type}, dimension(${sol.n_reactions}) :: k_fwd
-        ${real_type}, dimension(${sol.n_reactions}) :: log_k_eq
+        %if falloff_reactions:
+        ${real_type}, dimension(${nf_dim}) :: k_falloff
+        %endif
 
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_fwd_rate_coefficients(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_fwd_rate_coefficients(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_fwd_rate_coefficients
+
+<%def name="_body_get_net_rates_of_progress(sol, falloff_reactions, three_body_reactions)">
         call get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
         call get_equilibrium_constants(temperature, log_k_eq)
         %for i in range(sol.n_reactions):
@@ -778,20 +946,31 @@ contains
                         Variable("k_fwd"), Variable("log_k_eq")))}
         %endfor
 
+</%def>
+    subroutine get_net_rates_of_progress(temperature, concentrations, r_net)
+
+        GPU_ROUTINE(get_net_rates_of_progress)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: concentrations
+        ${real_type}, intent(out), dimension(${nr_dim}) :: r_net
+
+        ${real_type}, dimension(${nr_dim}) :: k_fwd
+        ${real_type}, dimension(${nr_dim}) :: log_k_eq
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_net_rates_of_progress(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_net_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_net_rates_of_progress
 
-    subroutine get_net_production_rates(density, temperature, mass_fractions, omega)
-
-        GPU_ROUTINE(get_net_production_rates)
-
-        ${real_type}, intent(in) :: density
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in),  dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: omega
-
-        ${real_type}, dimension(${sol.n_species})   :: concentrations
-        ${real_type}, dimension(${sol.n_reactions}) :: r_net
-
+<%def name="_body_get_net_production_rates(sol, falloff_reactions, three_body_reactions)">
         call get_concentrations(density, mass_fractions, concentrations)
         call get_net_rates_of_progress(temperature, concentrations, r_net)
 
@@ -800,37 +979,62 @@ contains
             sp.name, Variable("r_net")))}
         %endfor
 
+</%def>
+    subroutine get_net_production_rates(density, temperature, mass_fractions, omega)
+
+        GPU_ROUTINE(get_net_production_rates)
+
+        ${real_type}, intent(in) :: density
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in),  dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: omega
+
+        ${real_type}, dimension(${ns_dim})   :: concentrations
+        ${real_type}, dimension(${nr_dim}) :: r_net
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_net_production_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_net_production_rates(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_net_production_rates
 
-    subroutine get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
-
-        GPU_ROUTINE(get_fwd_rates_of_progress)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: concentrations
-        ${real_type}, intent(out), dimension(${sol.n_reactions}) :: r_fwd
-
-        ${real_type}, dimension(${sol.n_reactions}) :: k_fwd
-
+<%def name="_body_get_fwd_rates_of_progress(sol, falloff_reactions, three_body_reactions)">
         call get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
         %for i in range(sol.n_reactions):
         r_fwd(${i+1}) = ${cgm(ce.fwd_rate_of_progress_expr(sol, i,
                         Variable("concentrations"), Variable("k_fwd")))}
         %endfor
 
-    end subroutine get_fwd_rates_of_progress
+</%def>
+    subroutine get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
 
-    subroutine get_rev_rates_of_progress(temperature, concentrations, r_rev)
-
-        GPU_ROUTINE(get_rev_rates_of_progress)
+        GPU_ROUTINE(get_fwd_rates_of_progress)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: concentrations
-        ${real_type}, intent(out), dimension(${sol.n_reactions}) :: r_rev
+        ${real_type}, intent(in), dimension(${ns_dim}) :: concentrations
+        ${real_type}, intent(out), dimension(${nr_dim}) :: r_fwd
 
-        ${real_type}, dimension(${sol.n_reactions}) :: k_fwd
-        ${real_type}, dimension(${sol.n_reactions}) :: log_k_eq
+        ${real_type}, dimension(${nr_dim}) :: k_fwd
 
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_fwd_rates_of_progress(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_fwd_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_fwd_rates_of_progress
+
+<%def name="_body_get_rev_rates_of_progress(sol, falloff_reactions, three_body_reactions)">
         call get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
         call get_equilibrium_constants(temperature, log_k_eq)
         %for i in range(sol.n_reactions):
@@ -839,20 +1043,31 @@ contains
                         Variable("k_fwd"), Variable("log_k_eq")))}
         %endfor
 
+</%def>
+    subroutine get_rev_rates_of_progress(temperature, concentrations, r_rev)
+
+        GPU_ROUTINE(get_rev_rates_of_progress)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: concentrations
+        ${real_type}, intent(out), dimension(${nr_dim}) :: r_rev
+
+        ${real_type}, dimension(${nr_dim}) :: k_fwd
+        ${real_type}, dimension(${nr_dim}) :: log_k_eq
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_rev_rates_of_progress(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_rev_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_rev_rates_of_progress
 
-    subroutine get_creation_rates(density, temperature, mass_fractions, cdot)
-
-        GPU_ROUTINE(get_creation_rates)
-
-        ${real_type}, intent(in) :: density
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in),  dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: cdot
-
-        ${real_type}, dimension(${sol.n_species})   :: concentrations
-        ${real_type}, dimension(${sol.n_reactions}) :: r_fwd, r_rev
-
+<%def name="_body_get_creation_rates(sol, falloff_reactions, three_body_reactions)">
         call get_concentrations(density, mass_fractions, concentrations)
         call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
         call get_rev_rates_of_progress(temperature, concentrations, r_rev)
@@ -862,20 +1077,32 @@ contains
             Variable("r_fwd"), Variable("r_rev")))}
         %endfor
 
-    end subroutine get_creation_rates
+</%def>
+    subroutine get_creation_rates(density, temperature, mass_fractions, cdot)
 
-    subroutine get_destruction_rates(density, temperature, mass_fractions, ddot)
-
-        GPU_ROUTINE(get_destruction_rates)
+        GPU_ROUTINE(get_creation_rates)
 
         ${real_type}, intent(in) :: density
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in),  dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: ddot
+        ${real_type}, intent(in),  dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: cdot
 
-        ${real_type}, dimension(${sol.n_species})   :: concentrations
-        ${real_type}, dimension(${sol.n_reactions}) :: r_fwd, r_rev
+        ${real_type}, dimension(${ns_dim})   :: concentrations
+        ${real_type}, dimension(${nr_dim}) :: r_fwd, r_rev
 
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_creation_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_creation_rates(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_creation_rates
+
+<%def name="_body_get_destruction_rates(sol, falloff_reactions, three_body_reactions)">
         call get_concentrations(density, mass_fractions, concentrations)
         call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
         call get_rev_rates_of_progress(temperature, concentrations, r_rev)
@@ -885,8 +1112,44 @@ contains
             Variable("r_fwd"), Variable("r_rev")))}
         %endfor
 
+</%def>
+    subroutine get_destruction_rates(density, temperature, mass_fractions, ddot)
+
+        GPU_ROUTINE(get_destruction_rates)
+
+        ${real_type}, intent(in) :: density
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in),  dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: ddot
+
+        ${real_type}, dimension(${ns_dim})   :: concentrations
+        ${real_type}, dimension(${nr_dim}) :: r_fwd, r_rev
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_destruction_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_destruction_rates(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_destruction_rates
 
+<%def name="_body_get_creation_destruction_rates(sol, falloff_reactions, three_body_reactions)">
+        call get_concentrations(density, mass_fractions, concentrations)
+        call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
+        call get_rev_rates_of_progress(temperature, concentrations, r_rev)
+
+        %for i, sp in enumerate(sol.species()):
+        cdot(${i+1}) = ${cgm(ce.creation_rate_expr(sol, sp.name,
+            Variable("r_fwd"), Variable("r_rev")))}
+        ddot(${i+1}) = ${cgm(ce.destruction_rate_expr(sol, sp.name,
+            Variable("r_fwd"), Variable("r_rev")))}
+        %endfor
+
+</%def>
     subroutine get_creation_destruction_rates(density, temperature, &
         mass_fractions, cdot, ddot)
 
@@ -894,63 +1157,79 @@ contains
 
         ${real_type}, intent(in) :: density
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in),  dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: cdot, ddot
+        ${real_type}, intent(in),  dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: cdot, ddot
 
-        ${real_type}, dimension(${sol.n_species})   :: concentrations
-        ${real_type}, dimension(${sol.n_reactions}) :: r_fwd, r_rev
+        ${real_type}, dimension(${ns_dim})   :: concentrations
+        ${real_type}, dimension(${nr_dim}) :: r_fwd, r_rev
 
-        call get_concentrations(density, mass_fractions, concentrations)
-        call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
-        call get_rev_rates_of_progress(temperature, concentrations, r_rev)
-
-        %for i, sp in enumerate(sol.species()):
-        cdot(${i+1}) = ${cgm(ce.creation_rate_expr(sol, sp.name,
-            Variable("r_fwd"), Variable("r_rev")))}
-        ddot(${i+1}) = ${cgm(ce.destruction_rate_expr(sol, sp.name,
-            Variable("r_fwd"), Variable("r_rev")))}
-        %endfor
-
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_creation_destruction_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_creation_destruction_rates(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_creation_destruction_rates
 
-    subroutine get_species_viscosities(temperature, viscosities)
-
-        GPU_ROUTINE(get_species_viscosities)
-
-        ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: viscosities
-
+<%def name="_body_get_species_viscosities(sol, falloff_reactions, three_body_reactions)">
         %for sp in range(sol.n_species):
         viscosities(${sp+1}) = ${cgm(ce.viscosity_polynomial_expr(
             sol.get_viscosity_polynomial(sp),
             Variable("temperature")))}
         %endfor
 
-    end subroutine get_species_viscosities
+</%def>
+    subroutine get_species_viscosities(temperature, viscosities)
 
-    subroutine get_species_thermal_conductivities(temperature, conductivities)
-
-        GPU_ROUTINE(get_species_thermal_conductivities)
+        GPU_ROUTINE(get_species_viscosities)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: conductivities
+        ${real_type}, intent(out), dimension(${ns_dim}) :: viscosities
 
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_viscosities(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_viscosities(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_species_viscosities
+
+<%def name="_body_get_species_thermal_conductivities(sol, falloff_reactions, three_body_reactions)">
         %for sp in range(sol.n_species):
         conductivities(${sp+1}) = ${cgm(ce.conductivity_polynomial_expr(
             sol.get_thermal_conductivity_polynomial(sp),
             Variable("temperature")))}
         %endfor
 
-    end subroutine get_species_thermal_conductivities
+</%def>
+    subroutine get_species_thermal_conductivities(temperature, conductivities)
 
-    subroutine get_species_binary_mass_diffusivities(temperature, diffusivities)
-
-        GPU_ROUTINE(get_species_binary_mass_diffusivities)
+        GPU_ROUTINE(get_species_thermal_conductivities)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(out), dimension(${sol.n_species}, ${sol.n_species})&
-            :: diffusivities
+        ${real_type}, intent(out), dimension(${ns_dim}) :: conductivities
 
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_thermal_conductivities(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_thermal_conductivities(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_species_thermal_conductivities
+
+<%def name="_body_get_species_binary_mass_diffusivities(sol, falloff_reactions, three_body_reactions)">
         %for i in range(sol.n_species):
         %for j in range(sol.n_species):
         diffusivities(${i + 1}, ${j + 1}) = ${cgm(ce.diffusivity_polynomial_expr(
@@ -959,21 +1238,28 @@ contains
         %endfor
         %endfor
 
-    end subroutine get_species_binary_mass_diffusivities
+</%def>
+    subroutine get_species_binary_mass_diffusivities(temperature, diffusivities)
 
-    subroutine get_mixture_viscosity_mixavg(&
-        temperature, mass_fractions, mixture_viscosity_mixavg)
-
-        GPU_ROUTINE(get_mixture_viscosity_mixavg)
+        GPU_ROUTINE(get_species_binary_mass_diffusivities)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out) :: mixture_viscosity_mixavg
+        ${real_type}, intent(out), dimension(${ns_dim}, ${ns_dim})&
+            :: diffusivities
 
-        ${real_type} :: mix_mol_weight
-        ${real_type}, dimension(${sol.n_species}) :: &
-            mole_fractions, viscosities, mix_rule_f
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_binary_mass_diffusivities(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_binary_mass_diffusivities(sol, falloff_reactions, three_body_reactions)}
+%endif
+    end subroutine get_species_binary_mass_diffusivities
 
+<%def name="_body_get_mixture_viscosity_mixavg(sol, falloff_reactions, three_body_reactions)">
         call get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
         call get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
         call get_species_viscosities(temperature, viscosities)
@@ -985,6 +1271,30 @@ contains
 
         mixture_viscosity_mixavg = sum(mole_fractions*viscosities/mix_rule_f)
 
+</%def>
+    subroutine get_mixture_viscosity_mixavg(&
+        temperature, mass_fractions, mixture_viscosity_mixavg)
+
+        GPU_ROUTINE(get_mixture_viscosity_mixavg)
+
+        ${real_type}, intent(in) :: temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out) :: mixture_viscosity_mixavg
+
+        ${real_type} :: mix_mol_weight
+        ${real_type}, dimension(${ns_dim}) :: &
+            mole_fractions, viscosities, mix_rule_f
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_mixture_viscosity_mixavg(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_mixture_viscosity_mixavg(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_mixture_viscosity_mixavg
 
     subroutine get_mixture_thermal_conductivity_mixavg(temperature, &
@@ -993,11 +1303,11 @@ contains
         GPU_ROUTINE(get_mixture_thermal_conductivity_mixavg)
 
         ${real_type}, intent(in) :: temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
         ${real_type}, intent(out) :: mixture_thermal_conductivity_mixavg
 
         ${real_type} :: mix_mol_weight
-        ${real_type}, dimension(${sol.n_species}) :: mole_fractions, conductivities
+        ${real_type}, dimension(${ns_dim}) :: mole_fractions, conductivities
 
         call get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
         call get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
@@ -1009,20 +1319,7 @@ contains
 
     end subroutine get_mixture_thermal_conductivity_mixavg
 
-    subroutine get_species_mass_diffusivities_mixavg(&
-        pressure, temperature, mass_fractions, mass_diffusivities_mixavg)
-
-        GPU_ROUTINE(get_species_mass_diffusivities_mixavg)
-
-        ${real_type}, intent(in) :: pressure, temperature
-        ${real_type}, intent(in), dimension(${sol.n_species}) :: mass_fractions
-        ${real_type}, intent(out), dimension(${sol.n_species}) :: &
-            mass_diffusivities_mixavg
-
-        ${real_type} :: mix_mol_weight
-        ${real_type}, dimension(${sol.n_species}) :: mole_fractions, x_sum, denom
-        ${real_type}, dimension(${sol.n_species}, ${sol.n_species}) :: bdiff_ij
-
+<%def name="_body_get_species_mass_diffusivities_mixavg(sol, falloff_reactions, three_body_reactions)">
         call get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
         call get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
         call get_species_binary_mass_diffusivities(temperature, bdiff_ij)
@@ -1049,6 +1346,31 @@ contains
         end if
         %endfor
 
+</%def>
+    subroutine get_species_mass_diffusivities_mixavg(&
+        pressure, temperature, mass_fractions, mass_diffusivities_mixavg)
+
+        GPU_ROUTINE(get_species_mass_diffusivities_mixavg)
+
+        ${real_type}, intent(in) :: pressure, temperature
+        ${real_type}, intent(in), dimension(${ns_dim}) :: mass_fractions
+        ${real_type}, intent(out), dimension(${ns_dim}) :: &
+            mass_diffusivities_mixavg
+
+        ${real_type} :: mix_mol_weight
+        ${real_type}, dimension(${ns_dim}) :: mole_fractions, x_sum, denom
+        ${real_type}, dimension(${ns_dim}, ${ns_dim}) :: bdiff_ij
+
+%if multi:
+        select case (mech_id)
+%for _m in mechs:
+        case (${_m["id"]})
+${_body_get_species_mass_diffusivities_mixavg(_m['sol'], _m['falloff'], _m['three_body'])}
+%endfor
+        end select
+%else:
+${_body_get_species_mass_diffusivities_mixavg(sol, falloff_reactions, three_body_reactions)}
+%endif
     end subroutine get_species_mass_diffusivities_mixavg
 
 end module ${module_name}
@@ -1096,6 +1418,7 @@ class FortranCodeGenerator(CodeGenerator):
         multi = len(mechs) > 1
         num_species_max = max(m["sol"].n_species for m in mechs)
         num_reactions_max = max(m["sol"].n_reactions for m in mechs)
+        num_elements_max = max(m["sol"].n_elements for m in mechs)
         sol = sols[0]
 
         if opts.directive_offload == "acc":
@@ -1137,8 +1460,15 @@ class FortranCodeGenerator(CodeGenerator):
 
             mechs=mechs,
             multi=multi,
+            ns_dim=("num_species_max" if multi else str(sol.n_species)),
+            nr_dim=("num_reactions_max" if multi else str(sol.n_reactions)),
             num_species_max=num_species_max,
-            num_reactions_max=num_reactions_max
+            num_reactions_max=num_reactions_max,
+            num_elements_max=num_elements_max,
+            nf_dim=(str(max(len(m["falloff"]) for m in mechs))
+                    if multi else str(len(falloff_rxn))),
+            any_falloff=(any(m["falloff"] for m in mechs)
+                         if multi else bool(falloff_rxn))
         ))
 
 
