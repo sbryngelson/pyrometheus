@@ -285,6 +285,7 @@ module ${module_name}
         (/ ${", ".join('"' + '{0: <4}'.format(x) + '"'
                        for x in pad_names(mechs[0]["sol"].element_names,
                                           num_elements_max))} /)
+    ${gpu_state}
     %else:
     integer, parameter :: num_elements = ${sol.n_elements}
     integer, parameter :: num_species = ${sol.n_species}
@@ -338,6 +339,8 @@ contains
         case default
             status = -1
         end select
+
+        ${gpu_state_update}
 
     end subroutine set_mechanism
 
@@ -1534,6 +1537,15 @@ end module ${module_name}
 # }}}
 
 
+#: Module state that set_mechanism changes and device code reads. One directive
+#: is emitted per name: a combined list would exceed the line-length wrapper,
+#: and OpenMP/OpenACC continuations are not plain Fortran continuations.
+_RUNTIME_STATE = [
+    "num_species", "num_reactions", "num_elements", "num_falloff", "mech_id",
+    "molecular_weights", "inv_molecular_weights",
+]
+
+
 class FortranCodeGenerator(CodeGenerator):
     @staticmethod
     def get_name() -> str:
@@ -1577,14 +1589,24 @@ class FortranCodeGenerator(CodeGenerator):
         sol = sols[0]
 
         if opts.directive_offload == "acc":
+            gpu_state_str = "\n    ".join(
+                "!$acc declare create(%s)" % v for v in _RUNTIME_STATE)
+            gpu_state_update = "\n        ".join(
+                "!$acc update device(%s)" % v for v in _RUNTIME_STATE)
             gpu_routine_str = """
 #define GPU_ROUTINE(name) !$acc routine seq
 """
         elif opts.directive_offload == "mp":
+            gpu_state_str = "\n    ".join(
+                "!$omp declare target(%s)" % v for v in _RUNTIME_STATE)
+            gpu_state_update = "\n        ".join(
+                "!$omp target update to(%s)" % v for v in _RUNTIME_STATE)
             gpu_routine_str = """
 #define GPU_ROUTINE(name) !$omp declare target
 """
         else:
+            gpu_state_str = ""
+            gpu_state_update = ""
             gpu_routine_str = """
 #define GPU_ROUTINE(name) ! name
 """
@@ -1607,6 +1629,8 @@ class FortranCodeGenerator(CodeGenerator):
 
             real_type=opts.scalar_type or "real(dp)",
             gpu_routine=gpu_routine_str,
+            gpu_state=gpu_state_str,
+            gpu_state_update=gpu_state_update,
 
             module_name=name,
 
