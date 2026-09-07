@@ -1026,10 +1026,20 @@ class FortranCodeGenerator(CodeGenerator):
 
     @staticmethod
     def generate(name: str,
-                 sol: ct.Solution,
+                 sol,
                  opts: CodeGenerationOptions = None) -> str:
+        """`sol` is a Cantera Solution, or a non-empty list of them. A list of
+        one emits exactly what a bare Solution emits."""
         if opts is None:
             opts = CodeGenerationOptions()
+
+        sols = list(sol) if isinstance(sol, (list, tuple)) else [sol]
+        if not sols:
+            raise ValueError("at least one mechanism is required")
+        if len(sols) > 1:
+            raise NotImplementedError(
+                "multi-mechanism generation lands in a later task")
+        sol = sols[0]
 
         if opts.directive_offload == "acc":
             gpu_routine_str = """
