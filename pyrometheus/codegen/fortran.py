@@ -5,6 +5,7 @@ Fortran code generation
 .. autoclass:: FortranCodeGenerator
 """
 
+import os
 import shlex
 from functools import partial
 from numbers import Number
@@ -247,7 +248,15 @@ module ${module_name}
     integer, parameter :: dp = selected_real_kind(15,307) ! Double precision
 
     integer, parameter :: num_elements = ${sol.n_elements}
+    %if multi:
+    integer, parameter :: num_species_max = ${num_species_max}
+    integer, parameter :: num_reactions_max = ${num_reactions_max}
+    integer, parameter :: num_mechanisms = ${len(mechs)}
+    integer :: num_species = ${mechs[0]["sol"].n_species}
+    integer :: mech_id = 1
+    %else:
     integer, parameter :: num_species = ${sol.n_species}
+    %endif
     integer, parameter :: num_reactions = ${sol.n_reactions}
     integer, parameter :: num_falloff = ${len(falloff_reactions)}
     ${real_type}, parameter :: one_atm = ${float_to_fortran(ct.one_atm)}
@@ -265,6 +274,26 @@ module ${module_name}
 
 contains
 
+    %if multi:
+    subroutine set_mechanism(mech_name, status)
+
+        character(len=*), intent(in) :: mech_name
+        integer, intent(out) :: status
+
+        status = 0
+        select case (trim(adjustl(mech_name)))
+        %for m in mechs:
+        case ("${m["name"]}")
+            mech_id = ${m["id"]}
+            num_species = ${m["sol"].n_species}
+        %endfor
+        case default
+            status = -1
+        end select
+
+    end subroutine set_mechanism
+
+    %endif
     subroutine get_species_name(sp_index, sp_name)
 
         integer, intent(in) :: sp_index
@@ -1036,9 +1065,24 @@ class FortranCodeGenerator(CodeGenerator):
         sols = list(sol) if isinstance(sol, (list, tuple)) else [sol]
         if not sols:
             raise ValueError("at least one mechanism is required")
-        if len(sols) > 1:
-            raise NotImplementedError(
-                "multi-mechanism generation lands in a later task")
+
+        mechs = []
+        for idx, s in enumerate(sols):
+            mechs.append({
+                "id": idx + 1,
+                "sol": s,
+                # NOT s.name -- that is the *phase* name, typically "gas" for
+                # every mechanism, which would make selection ambiguous. The
+                # source file's stem is the identity a user actually types.
+                "name": os.path.splitext(os.path.basename(s.source))[0],
+                "falloff": [(i, r) for i, r in enumerate(s.reactions())
+                            if r.reaction_type.startswith("falloff")],
+                "three_body": [(i, r) for i, r in enumerate(s.reactions())
+                               if r.reaction_type == "three-body-Arrhenius"],
+            })
+        multi = len(mechs) > 1
+        num_species_max = max(m["sol"].n_species for m in mechs)
+        num_reactions_max = max(m["sol"].n_reactions for m in mechs)
         sol = sols[0]
 
         if opts.directive_offload == "acc":
@@ -1076,7 +1120,12 @@ class FortranCodeGenerator(CodeGenerator):
             ce=pyrometheus.chem_expr,
 
             falloff_reactions=falloff_rxn,
-            three_body_reactions=three_body_rxn
+            three_body_reactions=three_body_rxn,
+
+            mechs=mechs,
+            multi=multi,
+            num_species_max=num_species_max,
+            num_reactions_max=num_reactions_max
         ))
 
 
