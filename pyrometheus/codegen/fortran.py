@@ -539,11 +539,24 @@ contains
         GPU_ROUTINE(get_species_enthalpies_rt)
 
         ${real_type}, intent(in) :: temperature
+        %if multi:
+        ${real_type}, intent(out), dimension(num_species_max) :: h0_rt
+
+        select case (mech_id)
+        %for m in mechs:
+        case (${m["id"]})
+            %for i, sp in enumerate(m["sol"].species()):
+            h0_rt(${i+1}) = ${cgm(ce.poly_to_enthalpy_expr(sp.thermo, "temperature"))}
+            %endfor
+        %endfor
+        end select
+        %else:
         ${real_type}, intent(out), dimension(${sol.n_species}) :: h0_rt
 
         %for i, sp in enumerate(sol.species()):
         h0_rt(${i+1}) = ${cgm(ce.poly_to_enthalpy_expr(sp.thermo, "temperature"))}
         %endfor
+        %endif
 
     end subroutine get_species_enthalpies_rt
 

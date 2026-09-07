@@ -47,3 +47,20 @@ def test_multi_mechanism_preamble():
     assert "num_species_max" not in single
     assert "mech_id" not in single
     assert "integer, parameter :: num_species = 7" in single
+
+
+def test_routine_body_branches_on_mech_id():
+    """Each arm inlines expressions; no arm may call another device routine."""
+    src = pyro.FortranCodeGenerator.generate(
+        "m_thermochem", [_sol("uiuc"), _sol("sandiego")],
+        pyro.CodeGenerationOptions())
+
+    start = src.index("subroutine get_species_enthalpies_rt")
+    body = src[start:src.index("end subroutine get_species_enthalpies_rt")]
+
+    assert "select case (mech_id)" in body
+    assert body.count("case (") >= 2
+    assert "dimension(num_species_max)" in body
+    # Arms must inline expressions, never call out -- a device routine calling
+    # another device routine faults at runtime under CCE OpenMP.
+    assert "call " not in body
