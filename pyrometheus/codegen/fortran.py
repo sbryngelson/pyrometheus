@@ -118,6 +118,18 @@ def str_np_inner(ary):
     raise TypeError("invalid argument to str_np_inner")
 
 
+def pad_to(ary, n):
+    """Pad a numeric array out to n entries so it fits a padded declaration."""
+    out = np.ones(n, dtype=float)
+    out[:len(ary)] = ary
+    return out
+
+
+def pad_names(names, n):
+    """Pad a name list out to n entries."""
+    return list(names) + [""] * (n - len(names))
+
+
 def str_np(ary):
     return ", ".join(float_to_fortran(entry) for entry in ary)
 
@@ -259,12 +271,20 @@ module ${module_name}
     integer :: mech_id = 1
     ${real_type}, parameter :: one_atm = ${float_to_fortran(ct.one_atm)}
     ${real_type}, parameter :: gas_constant = ${float_to_fortran(ct.gas_constant)}
-    ! Filled by set_mechanism, so every reference in the routine bodies below is
-    ! spelled exactly as it is in single-mechanism output.
-    ${real_type} :: molecular_weights(${num_species_max})
-    ${real_type} :: inv_molecular_weights(${num_species_max})
-    character(len=12) :: species_names(${num_species_max})
-    character(len=4) :: element_names(${num_elements_max})
+    ! Reset by set_mechanism. Initialised to mechanism 1 so the module
+    ! works without any set_mechanism call.
+    ${real_type} :: molecular_weights(${num_species_max}) = &
+        (/ ${str_np(pad_to(mechs[0]["sol"].molecular_weights, num_species_max))} /)
+    ${real_type} :: inv_molecular_weights(${num_species_max}) = &
+        (/ ${str_np(pad_to(1/mechs[0]["sol"].molecular_weights, num_species_max))} /)
+    character(len=12) :: species_names(${num_species_max}) = &
+        (/ ${", ".join('"' + '{0: <12}'.format(x) + '"'
+                       for x in pad_names(mechs[0]["sol"].species_names,
+                                          num_species_max))} /)
+    character(len=4) :: element_names(${num_elements_max}) = &
+        (/ ${", ".join('"' + '{0: <4}'.format(x) + '"'
+                       for x in pad_names(mechs[0]["sol"].element_names,
+                                          num_elements_max))} /)
     %else:
     integer, parameter :: num_elements = ${sol.n_elements}
     integer, parameter :: num_species = ${sol.n_species}
@@ -1579,6 +1599,8 @@ class FortranCodeGenerator(CodeGenerator):
             sol=sol,
 
             str_np=str_np,
+            pad_to=pad_to,
+            pad_names=pad_names,
             cgm=FortranExpressionMapper(),
             Variable=p.Variable,
             float_to_fortran=float_to_fortran,
