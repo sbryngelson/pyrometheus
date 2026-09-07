@@ -1547,7 +1547,7 @@ class FortranCodeGenerator(CodeGenerator):
                 "three_body": [(i, r) for i, r in enumerate(s.reactions())
                                if r.reaction_type == "three-body-Arrhenius"],
             })
-        multi = len(mechs) > 1
+        multi = len(mechs) > 1 or opts.runtime_mechanism
         num_species_max = max(m["sol"].n_species for m in mechs)
         num_reactions_max = max(m["sol"].n_reactions for m in mechs)
         num_elements_max = max(m["sol"].n_elements for m in mechs)

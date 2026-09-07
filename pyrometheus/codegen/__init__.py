@@ -9,6 +9,11 @@ import cantera as ct
 class CodeGenerationOptions:
     scalar_type: Optional[str] = None
     directive_offload: Optional[str] = None
+    #: Emit the runtime-selectable form (``num_species`` a variable, bounds on
+    #: ``num_species_max``, bodies branching on ``mech_id``) even for a single
+    #: mechanism. Without it a single mechanism emits the long-standing
+    #: fully-specialized form, byte for byte.
+    runtime_mechanism: bool = False
 
 
 class CodeGenerator:

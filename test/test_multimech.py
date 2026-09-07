@@ -102,3 +102,17 @@ def test_arm_matches_single_mechanism(mechname):
     assert len(got) == len(expected)
     for a, b in zip(got, expected):
         assert abs(a - b) <= 1e-13 * max(1.0, abs(b))
+
+
+def test_runtime_mechanism_form_for_single_mechanism():
+    """A single mechanism can be emitted in the runtime-selectable form, so MFC
+    can adopt runtime num_species before any bundling happens."""
+    src = pyro.FortranCodeGenerator.generate(
+        "m_thermochem", _sol("sandiego"),
+        pyro.CodeGenerationOptions(runtime_mechanism=True))
+    assert "integer, parameter :: num_species_max = 9" in src
+    assert "integer :: num_species = 9" in src
+    assert "select case (mech_id)" in src
+    assert "subroutine set_mechanism" in src
+    # and the default is still the specialized form
+    assert "mech_id" not in reference_source("sandiego")
