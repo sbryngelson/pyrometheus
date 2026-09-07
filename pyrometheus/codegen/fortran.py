@@ -306,9 +306,11 @@ contains
             inv_molecular_weights(1:${m["sol"].n_species}) = &
                 (/ ${str_np(1/m["sol"].molecular_weights)} /)
             species_names(1:${m["sol"].n_species}) = &
-                (/ ${", ".join('"'+'{0: <12}'.format(x)+'"' for x in m["sol"].species_names)} /)
+                (/ ${", ".join('"' + '{0: <12}'.format(x) + '"'
+                                for x in m["sol"].species_names)} /)
             element_names(1:${m["sol"].n_elements}) = &
-                (/ ${", ".join('"'+'{0: <4}'.format(x)+'"' for x in m["sol"].element_names)} /)
+                (/ ${", ".join('"' + '{0: <4}'.format(x) + '"'
+                                for x in m["sol"].element_names)} /)
         %endfor
         case default
             status = -1
@@ -360,7 +362,12 @@ contains
 
     end subroutine get_element_index
 
-<%def name="_body_get_specific_gas_constant(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_specific_gas_constant(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         specific_gas_constant = gas_constant * ( &
                 %for i in range(sol.n_species):
                     + inv_molecular_weights(${i+1})*mass_fractions(${i+1}) &
@@ -379,11 +386,11 @@ contains
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_specific_gas_constant(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_specific_gas_constant(_m)}
 %endfor
         end select
 %else:
-${_body_get_specific_gas_constant(sol, falloff_reactions, three_body_reactions)}
+${_body_get_specific_gas_constant(_single)}
 %endif
     end subroutine get_specific_gas_constant
 
@@ -419,7 +426,12 @@ ${_body_get_specific_gas_constant(sol, falloff_reactions, three_body_reactions)}
 
     end subroutine get_pressure
 
-<%def name="_body_get_mixture_molecular_weight(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_mixture_molecular_weight(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         mix_mol_weight = 1.0d0 / ( &
                 %for i in range(sol.n_species):
                     + inv_molecular_weights(${i+1})*mass_fractions(${i+1}) &
@@ -438,15 +450,20 @@ ${_body_get_specific_gas_constant(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_mixture_molecular_weight(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_mixture_molecular_weight(_m)}
 %endfor
         end select
 %else:
-${_body_get_mixture_molecular_weight(sol, falloff_reactions, three_body_reactions)}
+${_body_get_mixture_molecular_weight(_single)}
 %endif
     end subroutine get_mixture_molecular_weight
 
-<%def name="_body_get_concentrations(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_concentrations(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i in range(sol.n_species):
             concentrations(${i+1}) = density * &
                 inv_molecular_weights(${i+1}) * mass_fractions(${i+1})
@@ -465,15 +482,20 @@ ${_body_get_mixture_molecular_weight(sol, falloff_reactions, three_body_reaction
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_concentrations(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_concentrations(_m)}
 %endfor
         end select
 %else:
-${_body_get_concentrations(sol, falloff_reactions, three_body_reactions)}
+${_body_get_concentrations(_single)}
 %endif
     end subroutine get_concentrations
 
-<%def name="_body_get_mole_fractions(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_mole_fractions(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i in range(sol.n_species):
             mole_fractions(${i+1}) = inv_molecular_weights(${i+1}) * &
                 mass_fractions(${i+1}) * mix_mol_weight
@@ -492,15 +514,20 @@ ${_body_get_concentrations(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_mole_fractions(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_mole_fractions(_m)}
 %endfor
         end select
 %else:
-${_body_get_mole_fractions(sol, falloff_reactions, three_body_reactions)}
+${_body_get_mole_fractions(_single)}
 %endif
     end subroutine get_mole_fractions
 
-<%def name="_body_get_mass_averaged_property(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_mass_averaged_property(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         mix_property =  ( &
             %for i in range(sol.n_species):
                 + inv_molecular_weights(${i+1})*mass_fractions(${i+1}) &
@@ -522,11 +549,11 @@ ${_body_get_mole_fractions(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_mass_averaged_property(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_mass_averaged_property(_m)}
 %endfor
         end select
 %else:
-${_body_get_mass_averaged_property(sol, falloff_reactions, three_body_reactions)}
+${_body_get_mass_averaged_property(_single)}
 %endif
     end subroutine get_mass_averaged_property
 
@@ -546,7 +573,12 @@ ${_body_get_mass_averaged_property(sol, falloff_reactions, three_body_reactions)
 
     end subroutine get_mixture_specific_heat_cp_mass
 
-<%def name="_body_get_mixture_specific_heat_cv_mass(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_mixture_specific_heat_cv_mass(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_species_specific_heats_r(temperature, cp0_r)
 
         %for i in range(sol.n_species):
@@ -571,11 +603,11 @@ ${_body_get_mass_averaged_property(sol, falloff_reactions, three_body_reactions)
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_mixture_specific_heat_cv_mass(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_mixture_specific_heat_cv_mass(_m)}
 %endfor
         end select
 %else:
-${_body_get_mixture_specific_heat_cv_mass(sol, falloff_reactions, three_body_reactions)}
+${_body_get_mixture_specific_heat_cv_mass(_single)}
 %endif
     end subroutine get_mixture_specific_heat_cv_mass
 
@@ -595,7 +627,12 @@ ${_body_get_mixture_specific_heat_cv_mass(sol, falloff_reactions, three_body_rea
 
     end subroutine get_mixture_enthalpy_mass
 
-<%def name="_body_get_mixture_energy_mass(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_mixture_energy_mass(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_species_enthalpies_rt(temperature, h0_rt)
 
         %for i in range(sol.n_species):
@@ -620,15 +657,20 @@ ${_body_get_mixture_specific_heat_cv_mass(sol, falloff_reactions, three_body_rea
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_mixture_energy_mass(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_mixture_energy_mass(_m)}
 %endfor
         end select
 %else:
-${_body_get_mixture_energy_mass(sol, falloff_reactions, three_body_reactions)}
+${_body_get_mixture_energy_mass(_single)}
 %endif
     end subroutine get_mixture_energy_mass
 
-<%def name="_body_get_species_specific_heats_r(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_specific_heats_r(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i, sp in enumerate(sol.species()):
         cp0_r(${i+1}) = ${cgm(ce.poly_to_expr(sp.thermo, "temperature"))}
         %endfor
@@ -645,15 +687,20 @@ ${_body_get_mixture_energy_mass(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_specific_heats_r(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_specific_heats_r(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_specific_heats_r(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_specific_heats_r(_single)}
 %endif
     end subroutine get_species_specific_heats_r
 
-<%def name="_body_get_species_enthalpies_rt(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_enthalpies_rt(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i, sp in enumerate(sol.species()):
         h0_rt(${i+1}) = ${cgm(ce.poly_to_enthalpy_expr(sp.thermo, "temperature"))}
         %endfor
@@ -670,15 +717,20 @@ ${_body_get_species_specific_heats_r(sol, falloff_reactions, three_body_reaction
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_enthalpies_rt(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_enthalpies_rt(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_enthalpies_rt(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_enthalpies_rt(_single)}
 %endif
     end subroutine get_species_enthalpies_rt
 
-<%def name="_body_get_species_entropies_r(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_entropies_r(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i, sp in enumerate(sol.species()):
         s0_r(${i+1}) = ${cgm(ce.poly_to_entropy_expr(sp.thermo, "temperature"))}
         %endfor
@@ -695,15 +747,20 @@ ${_body_get_species_enthalpies_rt(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_entropies_r(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_entropies_r(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_entropies_r(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_entropies_r(_single)}
 %endif
     end subroutine get_species_entropies_r
 
-<%def name="_body_get_species_gibbs_rt(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_gibbs_rt(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_species_enthalpies_rt(temperature, h0_rt)
         call get_species_entropies_r(temperature, s0_r)
 
@@ -726,15 +783,20 @@ ${_body_get_species_entropies_r(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_gibbs_rt(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_gibbs_rt(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_gibbs_rt(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_gibbs_rt(_single)}
 %endif
     end subroutine get_species_gibbs_rt
 
-<%def name="_body_get_equilibrium_constants(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_equilibrium_constants(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         rt = gas_constant * temperature
         c0 = log(one_atm/rt)
 
@@ -766,11 +828,11 @@ ${_body_get_species_gibbs_rt(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_equilibrium_constants(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_equilibrium_constants(_m)}
 %endfor
         end select
 %else:
-${_body_get_equilibrium_constants(sol, falloff_reactions, three_body_reactions)}
+${_body_get_equilibrium_constants(_single)}
 %endif
     end subroutine get_equilibrium_constants
 
@@ -821,7 +883,12 @@ ${_body_get_equilibrium_constants(sol, falloff_reactions, three_body_reactions)}
     end subroutine get_temperature
 
     %if any_falloff:
-<%def name="_body_get_falloff_rates(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_falloff_rates(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i, (_, react) in enumerate(falloff_reactions):
         k_high(${i+1}) = ${cgm(ce.rate_coefficient_expr(
                                 react.rate.high_rate,
@@ -883,16 +950,21 @@ ${_body_get_equilibrium_constants(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_falloff_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_falloff_rates(_m)}
 %endfor
         end select
 %else:
-${_body_get_falloff_rates(sol, falloff_reactions, three_body_reactions)}
+${_body_get_falloff_rates(_single)}
 %endif
     end subroutine get_falloff_rates
 
     %endif
-<%def name="_body_get_fwd_rate_coefficients(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_fwd_rate_coefficients(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i, react in enumerate(sol.reactions()):
         %if react.equation in [r.equation for _, r in falloff_reactions]:
         k_fwd(${i+1}) = 0.d0
@@ -929,15 +1001,20 @@ ${_body_get_falloff_rates(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_fwd_rate_coefficients(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_fwd_rate_coefficients(_m)}
 %endfor
         end select
 %else:
-${_body_get_fwd_rate_coefficients(sol, falloff_reactions, three_body_reactions)}
+${_body_get_fwd_rate_coefficients(_single)}
 %endif
     end subroutine get_fwd_rate_coefficients
 
-<%def name="_body_get_net_rates_of_progress(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_net_rates_of_progress(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
         call get_equilibrium_constants(temperature, log_k_eq)
         %for i in range(sol.n_reactions):
@@ -962,15 +1039,20 @@ ${_body_get_fwd_rate_coefficients(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_net_rates_of_progress(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_net_rates_of_progress(_m)}
 %endfor
         end select
 %else:
-${_body_get_net_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
+${_body_get_net_rates_of_progress(_single)}
 %endif
     end subroutine get_net_rates_of_progress
 
-<%def name="_body_get_net_production_rates(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_net_production_rates(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_concentrations(density, mass_fractions, concentrations)
         call get_net_rates_of_progress(temperature, concentrations, r_net)
 
@@ -996,15 +1078,20 @@ ${_body_get_net_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_net_production_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_net_production_rates(_m)}
 %endfor
         end select
 %else:
-${_body_get_net_production_rates(sol, falloff_reactions, three_body_reactions)}
+${_body_get_net_production_rates(_single)}
 %endif
     end subroutine get_net_production_rates
 
-<%def name="_body_get_fwd_rates_of_progress(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_fwd_rates_of_progress(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
         %for i in range(sol.n_reactions):
         r_fwd(${i+1}) = ${cgm(ce.fwd_rate_of_progress_expr(sol, i,
@@ -1026,15 +1113,20 @@ ${_body_get_net_production_rates(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_fwd_rates_of_progress(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_fwd_rates_of_progress(_m)}
 %endfor
         end select
 %else:
-${_body_get_fwd_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
+${_body_get_fwd_rates_of_progress(_single)}
 %endif
     end subroutine get_fwd_rates_of_progress
 
-<%def name="_body_get_rev_rates_of_progress(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_rev_rates_of_progress(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_fwd_rate_coefficients(temperature, concentrations, k_fwd)
         call get_equilibrium_constants(temperature, log_k_eq)
         %for i in range(sol.n_reactions):
@@ -1059,15 +1151,20 @@ ${_body_get_fwd_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_rev_rates_of_progress(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_rev_rates_of_progress(_m)}
 %endfor
         end select
 %else:
-${_body_get_rev_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
+${_body_get_rev_rates_of_progress(_single)}
 %endif
     end subroutine get_rev_rates_of_progress
 
-<%def name="_body_get_creation_rates(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_creation_rates(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_concentrations(density, mass_fractions, concentrations)
         call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
         call get_rev_rates_of_progress(temperature, concentrations, r_rev)
@@ -1094,15 +1191,20 @@ ${_body_get_rev_rates_of_progress(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_creation_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_creation_rates(_m)}
 %endfor
         end select
 %else:
-${_body_get_creation_rates(sol, falloff_reactions, three_body_reactions)}
+${_body_get_creation_rates(_single)}
 %endif
     end subroutine get_creation_rates
 
-<%def name="_body_get_destruction_rates(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_destruction_rates(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_concentrations(density, mass_fractions, concentrations)
         call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
         call get_rev_rates_of_progress(temperature, concentrations, r_rev)
@@ -1129,15 +1231,20 @@ ${_body_get_creation_rates(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_destruction_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_destruction_rates(_m)}
 %endfor
         end select
 %else:
-${_body_get_destruction_rates(sol, falloff_reactions, three_body_reactions)}
+${_body_get_destruction_rates(_single)}
 %endif
     end subroutine get_destruction_rates
 
-<%def name="_body_get_creation_destruction_rates(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_creation_destruction_rates(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_concentrations(density, mass_fractions, concentrations)
         call get_fwd_rates_of_progress(temperature, concentrations, r_fwd)
         call get_rev_rates_of_progress(temperature, concentrations, r_rev)
@@ -1167,15 +1274,20 @@ ${_body_get_destruction_rates(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_creation_destruction_rates(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_creation_destruction_rates(_m)}
 %endfor
         end select
 %else:
-${_body_get_creation_destruction_rates(sol, falloff_reactions, three_body_reactions)}
+${_body_get_creation_destruction_rates(_single)}
 %endif
     end subroutine get_creation_destruction_rates
 
-<%def name="_body_get_species_viscosities(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_viscosities(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for sp in range(sol.n_species):
         viscosities(${sp+1}) = ${cgm(ce.viscosity_polynomial_expr(
             sol.get_viscosity_polynomial(sp),
@@ -1194,15 +1306,20 @@ ${_body_get_creation_destruction_rates(sol, falloff_reactions, three_body_reacti
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_viscosities(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_viscosities(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_viscosities(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_viscosities(_single)}
 %endif
     end subroutine get_species_viscosities
 
-<%def name="_body_get_species_thermal_conductivities(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_thermal_conductivities(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for sp in range(sol.n_species):
         conductivities(${sp+1}) = ${cgm(ce.conductivity_polynomial_expr(
             sol.get_thermal_conductivity_polynomial(sp),
@@ -1221,15 +1338,20 @@ ${_body_get_species_viscosities(sol, falloff_reactions, three_body_reactions)}
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_thermal_conductivities(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_thermal_conductivities(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_thermal_conductivities(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_thermal_conductivities(_single)}
 %endif
     end subroutine get_species_thermal_conductivities
 
-<%def name="_body_get_species_binary_mass_diffusivities(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_binary_mass_diffusivities(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         %for i in range(sol.n_species):
         %for j in range(sol.n_species):
         diffusivities(${i + 1}, ${j + 1}) = ${cgm(ce.diffusivity_polynomial_expr(
@@ -1251,15 +1373,20 @@ ${_body_get_species_thermal_conductivities(sol, falloff_reactions, three_body_re
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_binary_mass_diffusivities(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_binary_mass_diffusivities(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_binary_mass_diffusivities(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_binary_mass_diffusivities(_single)}
 %endif
     end subroutine get_species_binary_mass_diffusivities
 
-<%def name="_body_get_mixture_viscosity_mixavg(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_mixture_viscosity_mixavg(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
         call get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
         call get_species_viscosities(temperature, viscosities)
@@ -1289,11 +1416,11 @@ ${_body_get_species_binary_mass_diffusivities(sol, falloff_reactions, three_body
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_mixture_viscosity_mixavg(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_mixture_viscosity_mixavg(_m)}
 %endfor
         end select
 %else:
-${_body_get_mixture_viscosity_mixavg(sol, falloff_reactions, three_body_reactions)}
+${_body_get_mixture_viscosity_mixavg(_single)}
 %endif
     end subroutine get_mixture_viscosity_mixavg
 
@@ -1319,7 +1446,12 @@ ${_body_get_mixture_viscosity_mixavg(sol, falloff_reactions, three_body_reaction
 
     end subroutine get_mixture_thermal_conductivity_mixavg
 
-<%def name="_body_get_species_mass_diffusivities_mixavg(sol, falloff_reactions, three_body_reactions)">
+<%def name="_body_get_species_mass_diffusivities_mixavg(_c)">
+<%
+    sol = _c["sol"]
+    falloff_reactions = _c["falloff"]
+    three_body_reactions = _c["three_body"]
+%>
         call get_mixture_molecular_weight(mass_fractions, mix_mol_weight)
         call get_mole_fractions(mix_mol_weight, mass_fractions, mole_fractions)
         call get_species_binary_mass_diffusivities(temperature, bdiff_ij)
@@ -1365,11 +1497,11 @@ ${_body_get_mixture_viscosity_mixavg(sol, falloff_reactions, three_body_reaction
         select case (mech_id)
 %for _m in mechs:
         case (${_m["id"]})
-${_body_get_species_mass_diffusivities_mixavg(_m['sol'], _m['falloff'], _m['three_body'])}
+${_body_get_species_mass_diffusivities_mixavg(_m)}
 %endfor
         end select
 %else:
-${_body_get_species_mass_diffusivities_mixavg(sol, falloff_reactions, three_body_reactions)}
+${_body_get_species_mass_diffusivities_mixavg(_single)}
 %endif
     end subroutine get_species_mass_diffusivities_mixavg
 
@@ -1468,7 +1600,9 @@ class FortranCodeGenerator(CodeGenerator):
             nf_dim=(str(max(len(m["falloff"]) for m in mechs))
                     if multi else str(len(falloff_rxn))),
             any_falloff=(any(m["falloff"] for m in mechs)
-                         if multi else bool(falloff_rxn))
+                         if multi else bool(falloff_rxn)),
+            _single={"sol": sol, "falloff": falloff_rxn,
+                     "three_body": three_body_rxn}
         ))
 
 
